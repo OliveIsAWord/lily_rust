@@ -17,14 +17,45 @@ pub struct Token {
 pub enum TokenKind {
     Identifier(String),
     Punctuation(Punctuation),
+    Keyword(Keyword),
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum Punctuation {
+    BraceOpen,
+    BraceClose,
+    ParenOpen,
+    ParenClose,
     Semicolon,
+    EqEq,
+    FatArrow,
+    Eq,
+    PathSep,
+    Colon,
+    ThinArrow,
 }
 
-const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[(Punctuation::Semicolon, ";")];
+const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[
+    (Punctuation::BraceOpen, "{"),
+    (Punctuation::BraceClose, "}"),
+    (Punctuation::ParenOpen, "("),
+    (Punctuation::ParenClose, ")"),
+    (Punctuation::Semicolon, ";"),
+    (Punctuation::EqEq, "=="),
+    (Punctuation::FatArrow, "=>"),
+    (Punctuation::Eq, "="),
+    (Punctuation::PathSep, "::"),
+    (Punctuation::Colon, ":"),
+    (Punctuation::ThinArrow, "->"),
+];
+
+#[derive(Clone, Copy, Debug)]
+pub enum Keyword {
+    Fn,
+    Let,
+}
+
+const KEYWORD_MAP: &[(Keyword, &str)] = &[(Keyword::Fn, "fn"), (Keyword::Let, "let")];
 
 pub fn lex(src: &str) -> Result<Vec<Token>, ()> {
     match all_consuming(terminated(many0(preceded(multispace0, token)), multispace0))(src) {
@@ -34,7 +65,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ()> {
 }
 
 pub fn token(input: &str) -> IResult<&str, Token> {
-    alt((identifier, punctuation))(input)
+    alt((punctuation, keyword, identifier))(input)
 }
 
 pub fn identifier(input: &str) -> IResult<&str, Token> {
@@ -50,13 +81,47 @@ pub fn identifier(input: &str) -> IResult<&str, Token> {
 }
 
 pub fn punctuation(input: &str) -> IResult<&str, Token> {
-    for &(p, s) in PUNCTUATION_MAP {
-        if let Some(rest) = input.strip_prefix(s) {
-            let token = Token {
-                kind: TokenKind::Punctuation(p),
-            };
-            return Ok((rest, token));
-        }
-    }
-    fail(input)
+    PUNCTUATION_MAP
+        .iter()
+        .find_map(|&(p, s)| {
+            // Check for punctuation at start of string
+            input.strip_prefix(s).map(|rest| {
+                (
+                    rest,
+                    Token {
+                        kind: TokenKind::Punctuation(p),
+                    },
+                )
+            })
+        })
+        .ok_or(())
+        .or_else(|_| fail(input))
+}
+
+pub fn keyword(input: &str) -> IResult<&str, Token> {
+    KEYWORD_MAP
+        .iter()
+        .find_map(|&(kw, s)| {
+            input
+                // Check for keyword at start of string
+                .strip_prefix(s)
+                // Skip if immediately followed by [a-zA-Z0-9_], since that's an identifier
+                // e.g. `let_it_be`
+                .filter(|rest| {
+                    !matches!(
+                        rest.chars().next(),
+                        Some(v) if v.is_ascii_alphanumeric() || v == '_'
+                    )
+                })
+                .map(|rest| {
+                    (
+                        rest,
+                        Token {
+                            kind: TokenKind::Keyword(kw),
+                        },
+                    )
+                })
+        })
+        .ok_or(())
+        .or_else(|_| fail(input))
 }
