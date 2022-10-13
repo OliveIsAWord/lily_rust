@@ -1,1 +1,1 @@
-let x = meoww();
+let x = meoww;

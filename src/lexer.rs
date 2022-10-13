@@ -8,19 +8,19 @@ use nom::{
     IResult,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum TokenKind {
     Identifier(String),
     Punctuation(Punctuation),
     Keyword(Keyword),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Punctuation {
     BraceOpen,
     BraceClose,
@@ -49,7 +49,7 @@ const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[
     (Punctuation::ThinArrow, "->"),
 ];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Keyword {
     Fn,
     Let,
