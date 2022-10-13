@@ -8,19 +8,19 @@ use nom::{
     IResult,
 };
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum TokenKind {
     Identifier(String),
     Punctuation(Punctuation),
     Keyword(Keyword),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Punctuation {
     BraceOpen,
     BraceClose,
@@ -49,13 +49,18 @@ const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[
     (Punctuation::ThinArrow, "->"),
 ];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Keyword {
+    As,
     Fn,
     Let,
 }
 
-const KEYWORD_MAP: &[(Keyword, &str)] = &[(Keyword::Fn, "fn"), (Keyword::Let, "let")];
+const KEYWORD_MAP: &[(Keyword, &str)] = &[
+    (Keyword::As, "as"),
+    (Keyword::Fn, "fn"),
+    (Keyword::Let, "let"),
+];
 
 pub fn lex(src: &str) -> Result<Vec<Token>, ()> {
     match all_consuming(terminated(many0(preceded(multispace0, token)), multispace0))(src) {
