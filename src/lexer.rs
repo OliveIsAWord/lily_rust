@@ -1,3 +1,4 @@
+use dbg_pls::DebugPls;
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -8,22 +9,23 @@ use nom::{
     IResult,
 };
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub enum TokenKind {
     Identifier(String),
     Punctuation(Punctuation),
     Keyword(Keyword),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub enum Punctuation {
     BraceOpen,
     BraceClose,
+    Comma,
     ParenOpen,
     ParenClose,
     Semicolon,
@@ -38,6 +40,7 @@ pub enum Punctuation {
 const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[
     (Punctuation::BraceOpen, "{"),
     (Punctuation::BraceClose, "}"),
+    (Punctuation::Comma, ","),
     (Punctuation::ParenOpen, "("),
     (Punctuation::ParenClose, ")"),
     (Punctuation::Semicolon, ";"),
@@ -49,7 +52,7 @@ const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[
     (Punctuation::ThinArrow, "->"),
 ];
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub enum Keyword {
     As,
     Fn,
