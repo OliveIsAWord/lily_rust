@@ -19,7 +19,7 @@ pub enum ItemKind {
 pub struct Fn {
     pub name: Ident,
     // make type annotations optional, e.g. for `self` or type inference?
-    pub params: Vec<(Ident, TypeKind)>,
+    pub params: Vec<(Ident, Mutability, TypeKind)>,
     pub return_type: Option<TypeKind>,
     pub body: Block,
 }
@@ -27,7 +27,7 @@ pub struct Fn {
 #[derive(Clone, Debug, DebugPls)]
 pub struct Block {
     pub statements: Vec<StatementKind>,
-    pub tail: Option<ExprKind>,
+    pub tail: Option<Box<ExprKind>>,
 }
 
 #[derive(Clone, Debug, DebugPls)]
@@ -35,20 +35,28 @@ pub enum StatementKind {
     Empty,
     ExprStatement(Box<ExprKind>),
     Item(ItemKind),
-    LetStatement(Ident, Box<ExprKind>),
+    LetStatement(Ident, Mutability, Option<Box<ExprKind>>),
 }
 
 #[derive(Clone, Debug, DebugPls)]
 pub enum ExprKind {
     Variable(Ident),
-    Block(Box<Block>),
+    Block(Block),
+    If(Box<Self>, Block, Option<Box<Self>>),
 }
 
 #[derive(Clone, Debug, DebugPls)]
 pub enum TypeKind {
     Name(Ident),
     Paren(Box<Self>),
+    Ref(Box<Self>, Mutability),
     Tuple(Vec<Self>),
+}
+
+#[derive(Clone, Copy, Debug, DebugPls)]
+pub enum Mutability {
+    Const,
+    Mut,
 }
 
 impl Default for TypeKind {
@@ -65,95 +73,114 @@ pub fn parse(input: &[Token]) -> Result<Vec<ItemKind>, String> {
         .map_err(|x| format!("{x:?}"))
 }
 
+// Justify: Chumsky's API plus Rust's mutually recursive grammar
+// basically necessitates all parsing be done in a single function
+#[allow(clippy::too_many_lines)]
 fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
+    let just_punc = |p| {
+        just(Token {
+            kind: TokenKind::Punctuation(p),
+        })
+    };
+    let just_kw = |k| {
+        just(Token {
+            kind: TokenKind::Keyword(k),
+        })
+    };
+    let comma = just_punc(Punctuation::Comma);
+    let maybe_mut = just_kw(Keyword::Mut).or_not().map(|maybe_mut| {
+        if maybe_mut.is_some() {
+            Mutability::Mut
+        } else {
+            Mutability::Const
+        }
+    });
+    let ref_ = just_punc(Punctuation::And).ignore_then(maybe_mut.clone());
     let ident = select! {
         Token { kind: TokenKind::Identifier(s) } => s,
     };
-    let comma = just(Token {
-        kind: TokenKind::Punctuation(Punctuation::Comma),
-    });
 
     let type_ = recursive(|type_: Recursive<Token, TypeKind, Simple<Token>>| {
-        ident.map(TypeKind::Name).or(type_
-            .separated_by(comma.clone())
-            .then(comma.clone().or_not())
-            .delimited_by(
-                just(Token {
-                    kind: TokenKind::Punctuation(Punctuation::ParenOpen),
-                }),
-                just(Token {
-                    kind: TokenKind::Punctuation(Punctuation::ParenClose),
-                }),
-            )
-            .map(|(fields, trailing_comma)| {
-                if fields.len() == 1 && trailing_comma.is_none() {
-                    // TODO: i hate this clone
-                    TypeKind::Paren(Box::new(fields[0].clone()))
-                } else {
-                    TypeKind::Tuple(fields)
-                }
-            }))
+        ident
+            .map(TypeKind::Name)
+            .or(ref_
+                .then(type_.clone())
+                .map(|(is_mut, pointee)| TypeKind::Ref(Box::new(pointee), is_mut)))
+            .or(type_
+                .separated_by(comma.clone())
+                .then(comma.clone().or_not())
+                .delimited_by(
+                    just_punc(Punctuation::ParenOpen),
+                    just_punc(Punctuation::ParenClose),
+                )
+                .map(|(fields, trailing_comma)| {
+                    if fields.len() == 1 && trailing_comma.is_none() {
+                        // TODO: i hate this clone
+                        TypeKind::Paren(Box::new(fields[0].clone()))
+                    } else {
+                        TypeKind::Tuple(fields)
+                    }
+                }))
     });
 
-    let fn_head = just(Token {
-        kind: TokenKind::Keyword(Keyword::Fn),
-    })
-    .ignore_then(ident)
-    .then(
-        ident
-            .then_ignore(just(Token {
-                kind: TokenKind::Punctuation(Punctuation::Colon),
-            }))
-            .then(type_.clone())
-            .separated_by(comma.clone())
-            .allow_trailing()
-            .delimited_by(
-                just(Token {
-                    kind: TokenKind::Punctuation(Punctuation::ParenOpen),
-                }),
-                just(Token {
-                    kind: TokenKind::Punctuation(Punctuation::ParenClose),
-                }),
-            ),
-    )
-    .then(
-        just(Token {
-            kind: TokenKind::Punctuation(Punctuation::ThinArrow),
-        })
-        .ignore_then(type_)
-        .or_not(),
-    );
+    let fn_signature = just_kw(Keyword::Fn)
+        .ignore_then(ident)
+        .then(
+            maybe_mut
+                .clone()
+                .then(ident)
+                .then_ignore(just_punc(Punctuation::Colon))
+                .then(type_.clone())
+                .map(|((is_mut, param), param_type)| (param, is_mut, param_type))
+                .separated_by(comma.clone())
+                .allow_trailing()
+                .delimited_by(
+                    just_punc(Punctuation::ParenOpen),
+                    just_punc(Punctuation::ParenClose),
+                ),
+        )
+        .then(
+            just_punc(Punctuation::ThinArrow)
+                .ignore_then(type_)
+                .or_not(),
+        );
 
     let expr = |block: Recursive<'a, _, _, _>| {
-        ident
-            .map(ExprKind::Variable)
-            .or(block.map(|b| ExprKind::Block(Box::new(b))))
+        recursive(|expr| {
+            let if_ = just_kw(Keyword::If)
+                .ignore_then(expr.clone())
+                .then(block.clone())
+                .then(
+                    just_kw(Keyword::Else)
+                        .ignore_then(expr)
+                        .map(Box::new)
+                        .or_not(),
+                )
+                .map(|((cond, body), else_)| ExprKind::If(Box::new(cond), body, else_));
+            ident
+                .map(ExprKind::Variable)
+                .or(block.clone().map(ExprKind::Block))
+                .or(if_)
+        })
     };
 
     let statement = |item: Recursive<'a, _, _, _>, block: Recursive<'a, _, _, _>| {
-        let let_statement = just(Token {
-            kind: TokenKind::Keyword(Keyword::Let),
-        })
-        .ignore_then(select! {
-            Token { kind: TokenKind::Identifier(s) } => s,
-        })
-        .then_ignore(just(Token {
-            kind: TokenKind::Punctuation(Punctuation::Eq),
-        }))
-        .then(expr(block.clone()))
-        .then_ignore(just(Token {
-            kind: TokenKind::Punctuation(Punctuation::Semicolon),
-        }))
-        .map(|(lhs, rhs)| StatementKind::LetStatement(lhs, Box::new(rhs)));
+        let let_statement = just_kw(Keyword::Let)
+            .ignore_then(maybe_mut)
+            .then(ident)
+            .then(
+                just_punc(Punctuation::Eq)
+                    .ignore_then(expr(block.clone()))
+                    .or_not(),
+            )
+            .then_ignore(just_punc(Punctuation::Semicolon))
+            .map(|((is_mut, lhs), rhs)| {
+                StatementKind::LetStatement(lhs, is_mut, rhs.map(Box::new))
+            });
         let expr_statement = expr(block)
-            .then_ignore(just(Token {
-                kind: TokenKind::Punctuation(Punctuation::Semicolon),
-            }))
+            .then_ignore(just_punc(Punctuation::Semicolon))
             .map(|e| StatementKind::ExprStatement(Box::new(e)));
-        let empty = just(Token {
-            kind: TokenKind::Punctuation(Punctuation::Semicolon),
-        })
-        .to(StatementKind::Empty);
+        let empty = just_punc(Punctuation::Semicolon).to(StatementKind::Empty);
         let_statement
             .or(empty)
             .or(item.map(StatementKind::Item))
@@ -165,16 +192,15 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
                 .repeated()
                 .then(expr(block).or_not())
                 .delimited_by(
-                    just(Token {
-                        kind: TokenKind::Punctuation(Punctuation::BraceOpen),
-                    }),
-                    just(Token {
-                        kind: TokenKind::Punctuation(Punctuation::BraceClose),
-                    }),
+                    just_punc(Punctuation::BraceOpen),
+                    just_punc(Punctuation::BraceClose),
                 )
-                .map(|(statements, tail)| Block { statements, tail })
+                .map(|(statements, tail)| Block {
+                    statements,
+                    tail: tail.map(Box::new),
+                })
         });
-        fn_head
+        fn_signature
             .then(block)
             .map(|(((name, params), return_type), body)| {
                 ItemKind::Fn(Fn {

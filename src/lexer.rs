@@ -29,6 +29,8 @@ pub enum Punctuation {
     ParenOpen,
     ParenClose,
     Semicolon,
+    AndAnd,
+    And,
     EqEq,
     FatArrow,
     Eq,
@@ -44,6 +46,8 @@ const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[
     (Punctuation::ParenOpen, "("),
     (Punctuation::ParenClose, ")"),
     (Punctuation::Semicolon, ";"),
+    (Punctuation::AndAnd, "&&"),
+    (Punctuation::And, "&"),
     (Punctuation::EqEq, "=="),
     (Punctuation::FatArrow, "=>"),
     (Punctuation::Eq, "="),
@@ -55,14 +59,20 @@ const PUNCTUATION_MAP: &[(Punctuation, &str)] = &[
 #[derive(Clone, Copy, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub enum Keyword {
     As,
+    Else,
+    If,
     Fn,
     Let,
+    Mut,
 }
 
 const KEYWORD_MAP: &[(Keyword, &str)] = &[
     (Keyword::As, "as"),
+    (Keyword::Else, "else"),
+    (Keyword::If, "if"),
     (Keyword::Fn, "fn"),
     (Keyword::Let, "let"),
+    (Keyword::Mut, "mut"),
 ];
 
 pub fn lex(src: &str) -> Result<Vec<Token>, ()> {
@@ -80,7 +90,7 @@ pub fn identifier(input: &str) -> IResult<&str, Token> {
     map(
         recognize(pair(
             alt((alpha1, tag("_"))),
-            many0_count(alt((alphanumeric1, tag("_")))),
+            many0_count(alt((alphanumeric1, tag("_"), tag("'")))),
         )),
         |x: &str| Token {
             kind: TokenKind::Identifier(x.to_owned()),
