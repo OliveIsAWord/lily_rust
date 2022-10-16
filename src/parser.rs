@@ -25,12 +25,6 @@ pub struct Fn {
 }
 
 #[derive(Clone, Debug, DebugPls)]
-pub struct Block {
-    pub statements: Vec<StatementKind>,
-    pub tail: Option<Box<ExprKind>>,
-}
-
-#[derive(Clone, Debug, DebugPls)]
 pub enum StatementKind {
     Empty,
     ExprStatement(Box<ExprKind>),
@@ -46,6 +40,37 @@ pub enum ExprKind {
 }
 
 #[derive(Clone, Debug, DebugPls)]
+pub struct Block {
+    pub statements: Vec<StatementKind>,
+    pub tail: Option<Box<ExprKind>>,
+}
+
+impl Block {
+    fn new(mut statements: Vec<StatementKind>, tail: Option<Box<ExprKind>>) -> Self {
+        // If the final statement can be read as an expr and there is no tail, move it to the tail
+        // TODO: this code is not very good :)
+        let tail = tail.or_else(|| match statements.pop() {
+            Some(StatementKind::ExprStatement(e)) if !e.ends_with_semicolon() => Some(e),
+            last => {
+                last.map(|x| statements.push(x));
+                None
+            }
+        });
+        Self { statements, tail }
+    }
+}
+
+impl ExprKind {
+    pub fn ends_with_semicolon(&self) -> bool {
+        match self {
+            Self::Variable(_) => true,
+            Self::Block(_) => false,
+            Self::If(_, _, else_expr) => matches!(else_expr, Some(e) if e.ends_with_semicolon()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, DebugPls)]
 pub enum TypeKind {
     Name(Ident),
     Paren(Box<Self>),
@@ -53,16 +78,15 @@ pub enum TypeKind {
     Tuple(Vec<Self>),
 }
 
+//// I assume this will be useful at some point
+// impl TypeKind {
+//     const UNIT: Self = Self::Tuple(vec![]);
+// }
+
 #[derive(Clone, Copy, Debug, DebugPls)]
 pub enum Mutability {
     Const,
     Mut,
-}
-
-impl Default for TypeKind {
-    fn default() -> Self {
-        Self::Tuple(vec![])
-    }
 }
 
 pub fn parse(input: &[Token]) -> Result<Vec<ItemKind>, String> {
@@ -178,7 +202,18 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
                 StatementKind::LetStatement(lhs, is_mut, rhs.map(Box::new))
             });
         let expr_statement = expr(block)
-            .then_ignore(just_punc(Punctuation::Semicolon))
+            // TODO: replace with non-boxing zero cost abstraction
+            .then_with(|e| {
+                if e.ends_with_semicolon() {
+                    just(Token {
+                        kind: TokenKind::Punctuation(Punctuation::Semicolon),
+                    })
+                    .to(e)
+                    .boxed()
+                } else {
+                    empty().to(e).boxed()
+                }
+            })
             .map(|e| StatementKind::ExprStatement(Box::new(e)));
         let empty = just_punc(Punctuation::Semicolon).to(StatementKind::Empty);
         let_statement
@@ -195,10 +230,7 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
                     just_punc(Punctuation::BraceOpen),
                     just_punc(Punctuation::BraceClose),
                 )
-                .map(|(statements, tail)| Block {
-                    statements,
-                    tail: tail.map(Box::new),
-                })
+                .map(|(statements, tail)| Block::new(statements, tail.map(Box::new)))
         });
         fn_signature
             .then(block)

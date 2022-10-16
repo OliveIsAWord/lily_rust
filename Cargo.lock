@@ -124,9 +124,9 @@ checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
 
 [[package]]
 name = "dbg-pls"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50e8bb7470a10e67fb07347d044987e38a7d28ede5a2febfea112626145d885d"
+checksum = "b94eb25b30f003eac5a8f2a582f417d6d22026ee3f4660867a2061957d8789f5"
 dependencies = [
  "dbg-pls-derive",
  "itoa",
@@ -142,9 +142,9 @@ dependencies = [
 
 [[package]]
 name = "dbg-pls-derive"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cec2fcd181de78b524aec9f40127b2a49d8d0aa8347594fb4d6e17f02b9fc9ff"
+checksum = "c7936c8ef76f22b4c3e38a767c576a8f2ee54a8c4782dc7ba4a667e8f6a8ef13"
 dependencies = [
  "proc-macro2",
  "quote",
