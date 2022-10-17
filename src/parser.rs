@@ -52,7 +52,9 @@ impl Block {
         let tail = tail.or_else(|| match statements.pop() {
             Some(StatementKind::ExprStatement(e)) if !e.ends_with_semicolon() => Some(e),
             last => {
-                last.map(|x| statements.push(x));
+                if let Some(x) = last {
+                    statements.push(x);
+                }
                 None
             }
         });
@@ -80,7 +82,7 @@ pub enum TypeKind {
 
 //// I assume this will be useful at some point
 // impl TypeKind {
-//     const UNIT: Self = Self::Tuple(vec![]);
+//     pub const UNIT: Self = Self::Tuple(vec![]);
 // }
 
 #[derive(Clone, Copy, Debug, DebugPls)]
