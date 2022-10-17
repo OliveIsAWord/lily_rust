@@ -38,6 +38,8 @@ pub enum ExprKind {
     Variable(Ident),
     Block(Block),
     If(Box<Self>, Block, Option<Box<Self>>),
+    While(Box<Self>, Block, Option<Box<Self>>),
+    Call(Box<Self>, Vec<Self>),
 }
 
 #[derive(Clone, Debug, DebugPls)]
@@ -50,12 +52,10 @@ impl Block {
     fn new(mut statements: Vec<StatementKind>, tail: Option<Box<ExprKind>>) -> Self {
         // If the final statement can be read as an expr and there is no tail, move it to the tail
         // TODO: this code is not very good :)
-        let tail = tail.or_else(|| match statements.pop() {
-            Some(StatementKind::ExprStatement(e)) if !e.ends_with_semicolon() => Some(e),
+        let tail = tail.or_else(|| match statements.pop()? {
+            StatementKind::ExprStatement(e) if !e.ends_with_semicolon() => Some(e),
             last => {
-                if let Some(x) = last {
-                    statements.push(x);
-                }
+                statements.push(last);
                 None
             }
         });
@@ -66,9 +66,11 @@ impl Block {
 impl ExprKind {
     pub fn ends_with_semicolon(&self) -> bool {
         match self {
-            Self::Variable(_) | Self::Literal(_) => true,
+            Self::Variable(_) | Self::Literal(_) | Self::Call(..) => true,
             Self::Block(_) => false,
-            Self::If(_, _, else_expr) => matches!(else_expr, Some(e) if e.ends_with_semicolon()),
+            Self::If(_, _, else_expr) | Self::While(_, _, else_expr) => {
+                matches!(else_expr, Some(e) if e.ends_with_semicolon())
+            }
         }
     }
 }
@@ -182,16 +184,44 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
                 .then(block.clone())
                 .then(
                     just_kw(Keyword::Else)
-                        .ignore_then(expr)
+                        .ignore_then(expr.clone())
                         .map(Box::new)
                         .or_not(),
                 )
                 .map(|((cond, body), else_)| ExprKind::If(Box::new(cond), body, else_));
-            literal
-                .map(ExprKind::Literal)
-                .or(ident.map(ExprKind::Variable))
-                .or(block.clone().map(ExprKind::Block))
-                .or(if_)
+            let while_ = just_kw(Keyword::While)
+                .ignore_then(expr.clone())
+                .then(block.clone())
+                .then(
+                    just_kw(Keyword::Else)
+                        .ignore_then(expr.clone())
+                        .map(Box::new)
+                        .or_not(),
+                )
+                .map(|((cond, body), else_)| ExprKind::While(Box::new(cond), body, else_));
+            let call = expr
+                .clone()
+                .separated_by(just_punc(Punctuation::Comma))
+                .allow_trailing()
+                .delimited_by(
+                    just_punc(Punctuation::ParenOpen),
+                    just_punc(Punctuation::ParenClose),
+                );
+            choice((
+                literal.map(ExprKind::Literal),
+                ident.map(ExprKind::Variable),
+                block.clone().map(ExprKind::Block),
+                if_,
+                while_,
+            ))
+            .then_with(move |e| {
+                // TODO: how to remove clones?
+                call.clone().repeated().map(move |calls| {
+                    calls
+                        .into_iter()
+                        .fold(e.clone(), |func, args| ExprKind::Call(Box::new(func), args))
+                })
+            })
         })
     };
 

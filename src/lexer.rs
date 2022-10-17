@@ -2,10 +2,11 @@ use dbg_pls::DebugPls;
 use nom::character::complete::satisfy;
 use nom::{
     branch::alt,
-    character::complete::{multispace0, u64 as u64_},
+    bytes::complete::is_not,
+    character::complete::{char as char_, multispace0, u64 as u64_},
     combinator::{all_consuming, fail, map, recognize},
     multi::{many0, many0_count},
-    sequence::{pair, preceded, terminated},
+    sequence::{delimited, pair, preceded, terminated},
     IResult,
 };
 
@@ -25,6 +26,7 @@ pub enum TokenKind {
 #[derive(Clone, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub enum Literal {
     Integer(u64),
+    String(String),
 }
 
 #[derive(Clone, Copy, Debug, DebugPls, Eq, Hash, PartialEq)]
@@ -70,6 +72,7 @@ pub enum Keyword {
     Fn,
     Let,
     Mut,
+    While,
 }
 
 const KEYWORD_MAP: &[(Keyword, &str)] = &[
@@ -79,6 +82,7 @@ const KEYWORD_MAP: &[(Keyword, &str)] = &[
     (Keyword::Fn, "fn"),
     (Keyword::Let, "let"),
     (Keyword::Mut, "mut"),
+    (Keyword::While, "while"),
 ];
 
 pub fn lex(src: &str) -> Result<Vec<Token>, ()> {
@@ -93,10 +97,16 @@ pub fn token(input: &str) -> IResult<&str, Token> {
 }
 
 pub fn literal(input: &str) -> IResult<&str, Token> {
-    let mut number = map(u64_, |n| Token {
+    let number = map(u64_, |n| Token {
         kind: TokenKind::Literal(Literal::Integer(n)),
     });
-    number(input)
+    let string = map(
+        delimited(char_('"'), is_not("\""), char_('"')),
+        |s: &str| Token {
+            kind: TokenKind::Literal(Literal::String(s.to_owned())),
+        },
+    );
+    alt((number, string))(input)
 }
 
 pub fn punctuation(input: &str) -> IResult<&str, Token> {
