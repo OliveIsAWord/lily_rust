@@ -1,8 +1,8 @@
 use dbg_pls::DebugPls;
+use nom::character::complete::satisfy;
 use nom::{
     branch::alt,
-    bytes::complete::tag,
-    character::complete::{alpha1, alphanumeric1, multispace0},
+    character::complete::{multispace0, u64 as u64_},
     combinator::{all_consuming, fail, map, recognize},
     multi::{many0, many0_count},
     sequence::{pair, preceded, terminated},
@@ -19,6 +19,12 @@ pub enum TokenKind {
     Identifier(String),
     Punctuation(Punctuation),
     Keyword(Keyword),
+    Literal(Literal),
+}
+
+#[derive(Clone, Debug, DebugPls, Eq, Hash, PartialEq)]
+pub enum Literal {
+    Integer(u64),
 }
 
 #[derive(Clone, Copy, Debug, DebugPls, Eq, Hash, PartialEq)]
@@ -83,19 +89,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ()> {
 }
 
 pub fn token(input: &str) -> IResult<&str, Token> {
-    alt((punctuation, keyword, identifier))(input)
+    alt((literal, punctuation, keyword, identifier))(input)
 }
 
-pub fn identifier(input: &str) -> IResult<&str, Token> {
-    map(
-        recognize(pair(
-            alt((alpha1, tag("_"))),
-            many0_count(alt((alphanumeric1, tag("_"), tag("'")))),
-        )),
-        |x: &str| Token {
-            kind: TokenKind::Identifier(x.to_owned()),
-        },
-    )(input)
+pub fn literal(input: &str) -> IResult<&str, Token> {
+    let mut number = map(u64_, |n| Token {
+        kind: TokenKind::Literal(Literal::Integer(n)),
+    });
+    number(input)
 }
 
 pub fn punctuation(input: &str) -> IResult<&str, Token> {
@@ -128,7 +129,7 @@ pub fn keyword(input: &str) -> IResult<&str, Token> {
                 .filter(|rest| {
                     !matches!(
                         rest.chars().next(),
-                        Some(v) if v.is_ascii_alphanumeric() || v == '_'
+                        Some(v) if is_id_continue(v)
                     )
                 })
                 .map(|rest| {
@@ -142,4 +143,24 @@ pub fn keyword(input: &str) -> IResult<&str, Token> {
         })
         .ok_or(())
         .or_else(|_| fail(input))
+}
+
+pub fn identifier(input: &str) -> IResult<&str, Token> {
+    map(
+        recognize(pair(
+            satisfy(is_id_start),
+            many0_count(satisfy(is_id_continue)),
+        )),
+        |x: &str| Token {
+            kind: TokenKind::Identifier(x.to_owned()),
+        },
+    )(input)
+}
+
+const fn is_id_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_'
+}
+
+const fn is_id_continue(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '\''
 }

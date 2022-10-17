@@ -1,4 +1,4 @@
-use crate::lexer::{Keyword, Punctuation, Token, TokenKind};
+use crate::lexer::{Keyword, Literal, Punctuation, Token, TokenKind};
 use chumsky::prelude::*;
 use dbg_pls::DebugPls;
 
@@ -34,6 +34,7 @@ pub enum StatementKind {
 
 #[derive(Clone, Debug, DebugPls)]
 pub enum ExprKind {
+    Literal(Literal),
     Variable(Ident),
     Block(Block),
     If(Box<Self>, Block, Option<Box<Self>>),
@@ -65,7 +66,7 @@ impl Block {
 impl ExprKind {
     pub fn ends_with_semicolon(&self) -> bool {
         match self {
-            Self::Variable(_) => true,
+            Self::Variable(_) | Self::Literal(_) => true,
             Self::Block(_) => false,
             Self::If(_, _, else_expr) => matches!(else_expr, Some(e) if e.ends_with_semicolon()),
         }
@@ -122,6 +123,9 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
         }
     });
     let ref_ = just_punc(Punctuation::And).ignore_then(maybe_mut.clone());
+    let literal = select! {
+        Token { kind: TokenKind::Literal(v) } => v,
+    };
     let ident = select! {
         Token { kind: TokenKind::Identifier(s) } => s,
     };
@@ -183,8 +187,9 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
                         .or_not(),
                 )
                 .map(|((cond, body), else_)| ExprKind::If(Box::new(cond), body, else_));
-            ident
-                .map(ExprKind::Variable)
+            literal
+                .map(ExprKind::Literal)
+                .or(ident.map(ExprKind::Variable))
                 .or(block.clone().map(ExprKind::Block))
                 .or(if_)
         })
