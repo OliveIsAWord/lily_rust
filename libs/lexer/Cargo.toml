@@ -1,10 +1,8 @@
 [package]
-name = "lily_rust"
+name = "lexer"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-chumsky = "0.8.0"
 dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty", "dbg-pls-derive"]}
-lexer = {path = "libs/lexer"}
-parser = {path = "libs/parser"}
+nom = "7.1.1"

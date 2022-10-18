@@ -1,6 +1,3 @@
-mod lexer;
-mod parser;
-
 use std::fs::read_to_string;
 
 use dbg_pls::color;
