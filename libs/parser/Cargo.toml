@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 chumsky = "0.8.0"
-dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty", "dbg-pls-derive"]}
+dbg-pls = {version = "0.3.4"}
 lexer = {path = "../lexer"}

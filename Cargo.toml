@@ -3,8 +3,13 @@ name = "lily_rust"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = [
+    "libs/lexer",
+    "libs/parser"
+]
+
 [dependencies]
-chumsky = "0.8.0"
-dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty", "dbg-pls-derive"]}
+dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty"]}
 lexer = {path = "libs/lexer"}
 parser = {path = "libs/parser"}
