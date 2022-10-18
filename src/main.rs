@@ -16,4 +16,18 @@ fn main() {
     for item in &ast {
         println!("{:?}", color(item));
     }
+
+    assert_eq!(ast.len(), 1);
+    let main_ = match &ast[0] {
+        parser::ItemKind::Fn(f) => f,
+        e => panic!("{:?}", color(e)),
+    };
+    assert_eq!(main_.name, "main");
+    assert!(main_.params.is_empty());
+    assert!(main_.return_type.is_none());
+    assert!(main_.body.tail.is_none());
+    
+    let block = &main_.body.statements;
+    println!("{:?}", color(block));
+    compiler::compile(block);
 }

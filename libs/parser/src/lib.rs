@@ -11,6 +11,7 @@ pub type Ident = String;
 // })
 
 #[derive(Clone, Debug, DebugPls)]
+#[non_exhaustive]
 pub enum ItemKind {
     Fn(Fn),
 }
