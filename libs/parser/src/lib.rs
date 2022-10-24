@@ -65,6 +65,7 @@ impl Block {
 }
 
 impl ExprKind {
+    #[must_use]
     pub fn ends_with_semicolon(&self) -> bool {
         match self {
             Self::Variable(_) | Self::Literal(_) | Self::Call(..) => true,

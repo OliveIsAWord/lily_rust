@@ -92,11 +92,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, ()> {
     }
 }
 
-pub fn token(input: &str) -> IResult<&str, Token> {
+fn token(input: &str) -> IResult<&str, Token> {
     alt((literal, punctuation, keyword, identifier))(input)
 }
 
-pub fn literal(input: &str) -> IResult<&str, Token> {
+fn literal(input: &str) -> IResult<&str, Token> {
     let number = map(u64_, |n| Token {
         kind: TokenKind::Literal(Literal::Integer(n)),
     });
@@ -109,7 +109,7 @@ pub fn literal(input: &str) -> IResult<&str, Token> {
     alt((number, string))(input)
 }
 
-pub fn punctuation(input: &str) -> IResult<&str, Token> {
+fn punctuation(input: &str) -> IResult<&str, Token> {
     PUNCTUATION_MAP
         .iter()
         .find_map(|&(p, s)| {
@@ -127,7 +127,7 @@ pub fn punctuation(input: &str) -> IResult<&str, Token> {
         .or_else(|_| fail(input))
 }
 
-pub fn keyword(input: &str) -> IResult<&str, Token> {
+fn keyword(input: &str) -> IResult<&str, Token> {
     KEYWORD_MAP
         .iter()
         .find_map(|&(kw, s)| {
@@ -155,7 +155,7 @@ pub fn keyword(input: &str) -> IResult<&str, Token> {
         .or_else(|_| fail(input))
 }
 
-pub fn identifier(input: &str) -> IResult<&str, Token> {
+fn identifier(input: &str) -> IResult<&str, Token> {
     map(
         recognize(pair(
             satisfy(is_id_start),
