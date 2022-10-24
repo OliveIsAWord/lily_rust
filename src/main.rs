@@ -26,8 +26,9 @@ fn main() {
     assert!(main_.params.is_empty());
     assert!(main_.return_type.is_none());
     assert!(main_.body.tail.is_none());
-    
+
     let block = &main_.body.statements;
     println!("{:?}", color(block));
-    compiler::compile(block);
+    //compiler::compile(block);
+    vreggy::maine();
 }

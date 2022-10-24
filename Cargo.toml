@@ -5,14 +5,14 @@ edition = "2021"
 
 [workspace]
 members = [
-    "libs/compiler",
     "libs/lexer",
     "libs/parser",
+    "libs/vreggy",
 ]
 
 [dependencies]
 dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty"]}
 
-compiler = {path = "libs/compiler"}
 lexer = {path = "libs/lexer"}
 parser = {path = "libs/parser"}
+vreggy = {path = "libs/vreggy"}

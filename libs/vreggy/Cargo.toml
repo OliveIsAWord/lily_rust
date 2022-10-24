@@ -1,0 +1,8 @@
+[package]
+name = "vreggy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty"]}
+parser = {path = "../parser"}
