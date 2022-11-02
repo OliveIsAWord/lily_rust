@@ -82,7 +82,11 @@ impl BlockBuilder {
         self.id
     }
     pub fn new_input(&mut self) -> Register {
-        let reg_id = self.input_accum.checked_sub(1).and_then(RegId::new).unwrap();
+        let reg_id = self
+            .input_accum
+            .checked_sub(1)
+            .and_then(RegId::new)
+            .unwrap();
         self.input_accum = reg_id.get();
         let reg = Register(reg_id);
         self.inputs.push(reg);
@@ -123,18 +127,22 @@ impl ProgramBuilder {
         self.entry_block = Some(id);
     }
     pub fn finish_block(&mut self, bb: BlockBuilder, exit: Branch) {
-        let BlockBuilder { inputs, ops, id, .. } = bb;
-        let block = Block {
-            inputs,
-            ops,
-            exit,
-        };
+        let BlockBuilder {
+            inputs, ops, id, ..
+        } = bb;
+        let block = Block { inputs, ops, exit };
         self.blocks.insert(id, block);
     }
     pub fn finish_block_jump(&mut self, bb: BlockBuilder, to: BranchPoint) {
         self.finish_block(bb, Branch::Jump(to));
     }
-    pub fn finish_block_branch(&mut self, bb: BlockBuilder, r: Register, to1: BranchPoint, to2: BranchPoint) {
+    pub fn finish_block_branch(
+        &mut self,
+        bb: BlockBuilder,
+        r: Register,
+        to1: BranchPoint,
+        to2: BranchPoint,
+    ) {
         // heehee, tutu
         self.finish_block(bb, Branch::Branch(r, to1, to2));
     }
@@ -169,9 +177,98 @@ fn fact() {
     let r3 = bb2.new_register();
     bb2.assign(r0, Op::Constant(1));
     bb2.assign(r1, Op::Sub(i0, r0));
-    bb2.assign(r2, Op::Call(bb1_id, vec![r0]));
+    bb2.assign(r2, Op::Call(bb1_id, vec![r1]));
     bb2.assign(r3, Op::Mul(i0, r2));
     pb.finish_block_jump(bb2, BranchPoint::Return(r3));
-    color!(pb);
-    dbg!(NonZeroI32::new(69).unwrap());
+    let mut bb3 = pb.create_block();
+    let r0 = bb3.new_register();
+    bb3.assign(r0, Op::Constant(5));
+    pb.set_entry(bb3.id());
+    pb.finish_block_jump(bb3, BranchPoint::Block(bb1_id, vec![r0]));
+    color!(&pb);
+    meow(&pb);
+}
+
+fn meow(pb: &ProgramBuilder) {
+    let entry_id = pb.entry_block.unwrap();
+    let val = execute(&pb.blocks, entry_id, vec![]);
+    println!("Terminated with {val}");
+}
+
+fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u64>) -> u64 {
+    loop {
+        //println!("Running block {block_id}");
+        //color!(&params);
+        //pause();
+        let block = p.get(&block_id).unwrap();
+        let mut regs = HashMap::new();
+        let g = |regs: &HashMap<Register, u64>, r: &Register| -> u64 {
+            if let Some(i) =
+                r.0.get()
+                    .checked_add(1)
+                    .and_then(i32::checked_neg)
+                    .and_then(|x| usize::try_from(x).ok())
+            {
+                params[i]
+            } else {
+                *regs.get(r).unwrap()
+            }
+        };
+        let op2 = |regs: &HashMap<Register, u64>, r1, r2, op: fn(u64, u64) -> u64| {
+            op(g(regs, r1), g(regs, r2))
+        };
+        for (reg, op) in &block.ops {
+            //color!(reg, op);
+            let val = match op {
+                Op::Constant(v) => *v,
+                Op::Copy(r) => g(&regs, r),
+                Op::Add(r1, r2) => op2(&regs, r1, r2, u64::wrapping_add),
+                Op::Sub(r1, r2) => op2(&regs, r1, r2, u64::wrapping_sub),
+                Op::Mul(r1, r2) => op2(&regs, r1, r2, u64::wrapping_mul),
+                Op::Cmp(r1, r2) => op2(&regs, r1, r2, |x, y| (x == y) as u64),
+                Op::Call(id, args) => execute(p, *id, args.iter().map(|r| g(&regs, &r)).collect()),
+            };
+            let val: u64 = val;
+            if let Some(reg) = reg {
+                let prev_value = regs.insert(*reg, val);
+                debug_assert!(prev_value.is_none());
+            }
+            //color!(&regs);
+        }
+        let jump_to = match &block.exit {
+            Branch::Jump(j) => j,
+            Branch::Branch(r, j1, j2) => {
+                if g(&regs, r) != 0 {
+                    j1
+                } else {
+                    j2
+                }
+            }
+        };
+        match jump_to {
+            BranchPoint::Return(r) => return g(&regs, &r),
+            BranchPoint::Block(id, args) => {
+                block_id = *id;
+                params = args.iter().map(|r| g(&regs, &r)).collect();
+            }
+        }
+    }
+}
+
+// fn foo() {
+//     let mut h: HashMap<String, String> = HashMap::new();
+//     h.insert(42.to_string(), false.to_string());
+//     let f = |map: &HashMap<String, String>, index: String| map.get(&index).unwrap().clone();
+//     let val = f(&h, 42.to_string());
+//     h.insert(43.to_string(), val);
+// }
+
+#[allow(dead_code)]
+fn pause() {
+    use std::io::{stdin, stdout, Write};
+    let mut stdout = stdout();
+    stdout.write_all(b"Press Enter to continue...").unwrap();
+    stdout.flush().unwrap();
+    let mut _line = String::new();
+    stdin().read_line(&mut _line).unwrap();
 }
