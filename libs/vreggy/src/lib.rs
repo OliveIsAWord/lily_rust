@@ -2,6 +2,7 @@
 use dbg_pls::{color, DebugPls};
 use parser::{ExprKind, StatementKind};
 use std::collections::HashMap;
+use std::fmt;
 use std::num::NonZeroI32;
 
 type RegId = NonZeroI32;
@@ -24,6 +25,16 @@ impl DebugPls for Register {
     }
 }
 
+impl fmt::Display for Register {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_input() {
+            write!(f, "i{}", -self.0.get())
+        } else {
+            write!(f, "r{}", self.0.get())
+        }
+    }
+}
+
 mod clean {
     use super::*;
     type R = Register;
@@ -36,6 +47,29 @@ mod clean {
         Mul(R, R),
         Cmp(R, R),
         Call(BlockId, Vec<R>),
+    }
+
+    impl fmt::Display for Op {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Constant(v) => write!(f, "{v}"),
+                Self::Copy(r) => write!(f, "{r}"),
+                Self::Add(r1, r2) => write!(f, "{r1} + {r2}"),
+                Self::Sub(r1, r2) => write!(f, "{r1} - {r2}"),
+                Self::Mul(r1, r2) => write!(f, "{r1} * {r2}"),
+                Self::Cmp(r1, r2) => write!(f, "{r1} == {r2}"),
+                Self::Call(id, regs) => {
+                    write!(f, "block_{id}(")?;
+                    for (i, r) in regs.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{r}")?;
+                    }
+                    write!(f, ")")
+                }
+            }
+        }
     }
 }
 use clean::*;
@@ -50,6 +84,24 @@ enum Branch {
 enum BranchPoint {
     Block(BlockId, Vec<Register>),
     Return(Register),
+}
+
+impl fmt::Display for BranchPoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Block(id, regs) => {
+                write!(f, "jump block_{id}(")?;
+                for (i, r) in regs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{r}")?;
+                }
+                write!(f, ")")
+            }
+            Self::Return(r) => write!(f, "return {r}"),
+        }
+    }
 }
 
 #[derive(Debug, DebugPls)]
@@ -148,6 +200,40 @@ impl ProgramBuilder {
     }
 }
 
+impl fmt::Display for ProgramBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(entry_id) = self.entry_block {
+            writeln!(f, "entry = block_{entry_id}()")?;
+        }
+        let mut blocks: Vec<_> = self.blocks.iter().collect();
+        blocks.sort_by_key(|b| b.0);
+        for (id, block) in blocks {
+            write!(f, "block_{id}(")?;
+            for (i, r) in block.inputs.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{r}")?;
+            }
+            writeln!(f, "):")?; // ):
+            for (reg, ops) in &block.ops {
+                write!(f, "    ")?;
+                match reg {
+                    Some(r) => write!(f, "{r}")?,
+                    None => write!(f, "_")?,
+                }
+                writeln!(f, " = {ops}")?;
+            }
+            write!(f, "    ")?;
+            match &block.exit {
+                Branch::Jump(j) => writeln!(f, "{j}")?,
+                Branch::Branch(r, j1, j2) => writeln!(f, "branch {r} {{ {j1} }} else {{ {j2} }}")?,
+            }
+        }
+        Ok(())
+    }
+}
+
 pub fn compile(_statements: &[StatementKind]) {
     fact();
 }
@@ -185,7 +271,7 @@ fn fact() {
     bb3.assign(r0, Op::Constant(5));
     pb.set_entry(bb3.id());
     pb.finish_block_jump(bb3, BranchPoint::Block(bb1_id, vec![r0]));
-    color!(&pb);
+    println!("{}", pb);
     meow(&pb);
 }
 
