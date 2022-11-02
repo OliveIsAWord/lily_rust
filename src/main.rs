@@ -29,6 +29,8 @@ fn main() {
 
     let block = &main_.body.statements;
     println!("{:?}", color(block));
-    //compiler::compile(block);
-    vreggy::maine();
+    println!("Compiling...");
+    let metrocop = vreggy::compile(block);
+    println!("=== Register Machine Instructions ===");
+    println!("{:?}", color(&metrocop));
 }
