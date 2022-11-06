@@ -1,6 +1,7 @@
 use chumsky::prelude::*;
 use dbg_pls::DebugPls;
-use lexer::{Keyword, Literal, Punctuation, Token, TokenKind};
+pub use lexer::Literal;
+use lexer::{Keyword, Punctuation, Token, TokenKind};
 
 pub type Ident = String;
 

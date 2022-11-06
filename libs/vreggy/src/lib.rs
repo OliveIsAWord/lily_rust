@@ -1,18 +1,21 @@
 #![allow(dead_code, unused_imports)]
 use dbg_pls::{color, DebugPls};
-use parser::{ExprKind, StatementKind};
+use parser::{Block as ParserBlock, ExprKind, Ident, Literal, Mutability, StatementKind};
 use std::collections::HashMap;
 use std::fmt;
+use std::iter::once;
+use std::mem;
 use std::num::NonZeroI32;
 
 type RegId = NonZeroI32;
 type BlockId = u32;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct Register(RegId);
+pub struct Register(RegId);
 
 impl Register {
-    fn is_input(self) -> bool {
+    #[must_use]
+    pub const fn is_input(self) -> bool {
         self.0.get() < 0
     }
 }
@@ -39,7 +42,7 @@ mod clean {
     use super::*;
     type R = Register;
     #[derive(Debug, DebugPls)]
-    pub(super) enum Op {
+    pub enum Op {
         Constant(u64),
         Copy(R),
         Add(R, R),
@@ -72,7 +75,7 @@ mod clean {
         }
     }
 }
-use clean::*;
+pub use clean::*;
 
 #[derive(Debug, DebugPls)]
 enum Branch {
@@ -81,7 +84,7 @@ enum Branch {
 }
 
 #[derive(Debug, DebugPls)]
-enum BranchPoint {
+pub enum BranchPoint {
     Block(BlockId, Vec<Register>),
     Return(Register),
 }
@@ -121,7 +124,7 @@ struct BlockBuilder {
 }
 
 impl BlockBuilder {
-    fn new(id: BlockId) -> Self {
+    const fn new(id: BlockId) -> Self {
         Self {
             reg_accum: 0,
             input_accum: 0,
@@ -130,7 +133,7 @@ impl BlockBuilder {
             ops: vec![],
         }
     }
-    pub fn id(&self) -> BlockId {
+    pub const fn id(&self) -> BlockId {
         self.id
     }
     pub fn new_input(&mut self) -> Register {
@@ -149,9 +152,23 @@ impl BlockBuilder {
         self.reg_accum = reg_id.get();
         Register(reg_id)
     }
+    pub fn unit_register(&mut self) -> Register {
+        let reg_id = self.reg_accum.checked_add(1).and_then(RegId::new).unwrap();
+        self.reg_accum = reg_id.get();
+        let r = Register(reg_id);
+        self.assign(r, Op::Constant(69));
+        r
+    }
     pub fn assign(&mut self, r: Register, op: Op) {
         debug_assert!(!r.is_input());
         self.ops.push((Some(r), op));
+    }
+    pub fn erase_register(&mut self, reg: Register) -> bool {
+        self.ops
+            .iter_mut()
+            .rev()
+            .find_map(|(r, _)| (*r == Some(reg)).then(|| *r = None))
+            .is_some()
     }
 }
 
@@ -207,7 +224,12 @@ impl fmt::Display for ProgramBuilder {
         }
         let mut blocks: Vec<_> = self.blocks.iter().collect();
         blocks.sort_by_key(|b| b.0);
+        let mut is_first_block = true;
         for (id, block) in blocks {
+            if !is_first_block {
+                writeln!(f)?;
+            }
+            is_first_block = false;
             write!(f, "block_{id}(")?;
             for (i, r) in block.inputs.iter().enumerate() {
                 if i > 0 {
@@ -215,30 +237,246 @@ impl fmt::Display for ProgramBuilder {
                 }
                 write!(f, "{r}")?;
             }
-            writeln!(f, "):")?; // ):
+            write!(f, "):")?; // ):
             for (reg, ops) in &block.ops {
-                write!(f, "    ")?;
+                write!(f, "\n    ")?;
                 match reg {
                     Some(r) => write!(f, "{r}")?,
                     None => write!(f, "_")?,
                 }
-                writeln!(f, " = {ops}")?;
+                write!(f, " = {ops}")?;
             }
-            write!(f, "    ")?;
+            write!(f, "\n    ")?;
             match &block.exit {
-                Branch::Jump(j) => writeln!(f, "{j}")?,
-                Branch::Branch(r, j1, j2) => writeln!(f, "branch {r} {{ {j1} }} else {{ {j2} }}")?,
+                Branch::Jump(j) => write!(f, "{j}")?,
+                Branch::Branch(r, j1, j2) => write!(f, "branch {r} {{ {j1} }} else {{ {j2} }}")?,
             }
         }
         Ok(())
     }
 }
 
-pub fn compile(_statements: &[StatementKind]) {
-    fact();
+pub fn compile(body: &ParserBlock) {
+    //_fact();
+    let mut compiler = Compiler::new();
+    compiler.compile_func(body);
+    compiler.pb.set_entry(42);
+    println!("{}", compiler.pb);
+    meow(&compiler.pb);
 }
 
-fn fact() {
+struct Compiler<'a> {
+    pb: ProgramBuilder,
+    bb: BlockBuilder,
+    vars: HashMap<&'a str, (Mutability, Register)>,
+    nonlocal_vars: Vec<HashMap<&'a str, (Mutability, Register)>>,
+}
+
+impl<'a> Compiler<'a> {
+    fn new() -> Self {
+        let mut pb = ProgramBuilder::new();
+        let bb = pb.create_block();
+        let vars = HashMap::new();
+        let nonlocal_vars = vec![];
+        Self {
+            pb,
+            bb,
+            vars,
+            nonlocal_vars,
+        }
+    }
+    fn scopes<'b>(&'b self) -> impl Iterator<Item = &HashMap<&'a str, (Mutability, Register)>> {
+        once(&self.vars).chain(self.nonlocal_vars.iter().rev())
+    }
+    fn get_var(&self, var: &str) -> (Mutability, Register) {
+        *self.scopes().find_map(|vars| vars.get(var)).unwrap()
+    }
+    fn compile_func(&mut self, func: &'a ParserBlock) {
+        for s in &func.statements {
+            self.compile_statement(s);
+        }
+        let return_reg = match &func.tail {
+            Some(e) => self.compile_expr(e),
+            None => {
+                let null = self.bb.new_register();
+                self.bb.assign(null, Op::Constant(69));
+                null
+            }
+        };
+        let bb = mem::replace(&mut self.bb, self.pb.create_block());
+        self.pb
+            .finish_block_jump(bb, BranchPoint::Return(return_reg));
+    }
+    fn compile_statement(&mut self, statement: &'a StatementKind) {
+        match statement {
+            StatementKind::Empty => (),
+            StatementKind::Item(_) => todo!("local items"),
+            StatementKind::LetStatement(ident, mutability, val) => {
+                let r = self.compile_expr(val.as_ref().unwrap());
+                let prev_reg = self.vars.insert(ident, (*mutability, r));
+                assert!(prev_reg.is_none());
+            }
+            StatementKind::ExprStatement(e) => {
+                let r = self.compile_expr(e);
+                let did_erase = self.bb.erase_register(r);
+                assert!(did_erase);
+            }
+        }
+    }
+    fn compile_parser_block(&mut self, block: &'a ParserBlock) -> Register {
+        let ParserBlock { statements, tail } = block;
+        let is_new_scope = !self.vars.is_empty();
+        if is_new_scope {
+            let parent_vars = mem::take(&mut self.vars);
+            self.nonlocal_vars.push(parent_vars);
+        }
+        for s in statements {
+            self.compile_statement(s);
+        }
+        let r = match tail {
+            Some(e) => self.compile_expr(e),
+            None => {
+                let null = self.bb.new_register();
+                self.bb.assign(null, Op::Constant(0));
+                null
+            }
+        };
+        if is_new_scope {
+            self.vars = self.nonlocal_vars.pop().unwrap();
+        }
+        r
+    }
+    fn compile_expr(&mut self, expr: &'a ExprKind) -> Register {
+        //color!(expr, &self.vars, &self.nonlocal_vars);
+        match expr {
+            ExprKind::Literal(lit) => match lit {
+                Literal::Integer(i) => {
+                    let r = self.bb.new_register();
+                    self.bb.assign(r, Op::Constant(*i));
+                    r
+                }
+                Literal::String(_) => todo!(),
+            },
+            ExprKind::Variable(v) => {
+                let r = self.get_var(v).1;
+                color!(&v, r, self.scopes().collect::<Vec<_>>());
+                r
+            }
+            ExprKind::Call(func, args) => {
+                let func = match func.as_ref() {
+                    ExprKind::Variable(s) => s,
+                    _ => todo!(),
+                };
+                let reg_args: Vec<_> = args.iter().map(|e| self.compile_expr(e)).collect();
+                let op = match func.as_ref() {
+                    "add" => Op::Add(reg_args[0], reg_args[1]),
+                    f => panic!("Unrecognized function {f}"),
+                };
+                let r = self.bb.new_register();
+                self.bb.assign(r, op);
+                r
+            }
+            ExprKind::Block(b) => self.compile_parser_block(b),
+            ExprKind::If(condition, if_parser_block, else_expr) => {
+                let condition_reg = self.compile_expr(condition);
+                let parent_scope: Vec<(&'a str, (Mutability, Register))> = {
+                    let mut flattened = HashMap::new();
+                    for (&var, &reg) in self.scopes().flatten() {
+                        flattened.entry(var).or_insert(reg);
+                    }
+                    flattened.into_iter().collect()
+                };
+                let branch_args: Vec<_> = parent_scope.iter().map(|&(_, (_, r))| r).collect();
+                color!(&parent_scope);
+                fn create_branch_scope<'a>(
+                    parent_scope: &[(&'a str, (Mutability, Register))],
+                    bb: &mut BlockBuilder,
+                ) -> HashMap<&'a str, (Mutability, Register)> {
+                    parent_scope
+                        .iter()
+                        .copied()
+                        .map(|(var, (m, _))| (var, (m, bb.new_input())))
+                        .collect()
+                }
+                type Self_<'ignore> = Compiler<'ignore>;
+                fn create_branch_block<'c, T, F>(
+                    self_: &mut Self_<'c>,
+                    ast: &'c T,
+                    compiler_func: F,
+                    parent_scope: &[(&'c str, (Mutability, Register))],
+                ) -> (Register, BlockBuilder)
+                where
+                    F: FnOnce(&mut Self_<'c>, &'c T) -> Register,
+                {
+                    let old_block = mem::replace(&mut self_.bb, self_.pb.create_block());
+                    let new_block_vars = create_branch_scope(parent_scope, &mut self_.bb);
+                    color!(&new_block_vars);
+                    self_.nonlocal_vars.push(new_block_vars);
+                    assert_eq!(self_.nonlocal_vars.len(), 1);
+                    let r = compiler_func(self_, ast);
+                    assert_eq!(self_.nonlocal_vars.len(), 1);
+                    let new_block = mem::replace(&mut self_.bb, old_block);
+                    (r, new_block)
+                }
+                let (if_reg, if_block) = create_branch_block(
+                    self,
+                    if_parser_block,
+                    Self::compile_parser_block,
+                    &parent_scope,
+                );
+                color!(&if_block);
+                let if_vars = self.nonlocal_vars.pop().unwrap();
+                let if_vars: Vec<_> = parent_scope
+                    .iter()
+                    .map(|(var, _)| if_vars.get(var).unwrap().1)
+                    .chain(once(if_reg))
+                    .collect();
+                let (else_reg, else_block) = match else_expr {
+                    Some(e) => {
+                        create_branch_block(self, e.as_ref(), Self::compile_expr, &parent_scope)
+                    }
+                    None => {
+                        let mut bb = self.pb.create_block();
+                        for _ in 0..parent_scope.len() {
+                            let _ = bb.new_input();
+                        }
+                        let r = bb.unit_register();
+                        (r, bb)
+                    }
+                };
+                let else_vars = self.nonlocal_vars.pop().unwrap();
+                let else_vars: Vec<_> = parent_scope
+                    .iter()
+                    .map(|(var, _)| else_vars.get(var).unwrap().1)
+                    .chain(once(else_reg))
+                    .collect();
+                color!(&if_vars, &else_vars);
+                let start_if_block = mem::replace(&mut self.bb, self.pb.create_block());
+                self.pb.finish_block_branch(
+                    start_if_block,
+                    condition_reg,
+                    BranchPoint::Block(if_block.id, branch_args.clone()),
+                    BranchPoint::Block(else_block.id, branch_args),
+                );
+                let _ = self.bb.new_input();
+                let evaled_reg = self.bb.new_input();
+                self.pb.finish_block_jump(
+                    if_block,
+                    BranchPoint::Block(self.bb.id, if_vars),
+                );
+                self.pb.finish_block_jump(
+                    else_block,
+                    BranchPoint::Block(self.bb.id, else_vars),
+                );
+                //let new_vars = create_branch_scope(&parent_scope, &mut self.bb);
+                evaled_reg
+            }
+            ExprKind::While(..) => todo!(),
+        }
+    }
+}
+
+fn _fact() {
     let mut pb = ProgramBuilder::new();
     let mut bb1 = pb.create_block();
     let i0 = bb1.new_input();
@@ -276,6 +514,7 @@ fn fact() {
 }
 
 fn meow(pb: &ProgramBuilder) {
+    println!("Executing...");
     let entry_id = pb.entry_block.unwrap();
     let val = execute(&pb.blocks, entry_id, vec![]);
     println!("Terminated with {val}");
@@ -289,16 +528,11 @@ fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u
         let block = p.get(&block_id).unwrap();
         let mut regs = HashMap::new();
         let g = |regs: &HashMap<Register, u64>, r: &Register| -> u64 {
-            if let Some(i) =
-                r.0.get()
-                    .checked_add(1)
-                    .and_then(i32::checked_neg)
-                    .and_then(|x| usize::try_from(x).ok())
-            {
-                params[i]
-            } else {
-                *regs.get(r).unwrap()
-            }
+            r.0.get()
+                .checked_add(1)
+                .and_then(i32::checked_neg)
+                .and_then(|x| usize::try_from(x).ok())
+                .map_or_else(|| *regs.get(r).unwrap(), |i| params[i])
         };
         let op2 = |regs: &HashMap<Register, u64>, r1, r2, op: fn(u64, u64) -> u64| {
             op(g(regs, r1), g(regs, r2))
@@ -311,8 +545,8 @@ fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u
                 Op::Add(r1, r2) => op2(&regs, r1, r2, u64::wrapping_add),
                 Op::Sub(r1, r2) => op2(&regs, r1, r2, u64::wrapping_sub),
                 Op::Mul(r1, r2) => op2(&regs, r1, r2, u64::wrapping_mul),
-                Op::Cmp(r1, r2) => op2(&regs, r1, r2, |x, y| (x == y) as u64),
-                Op::Call(id, args) => execute(p, *id, args.iter().map(|r| g(&regs, &r)).collect()),
+                Op::Cmp(r1, r2) => op2(&regs, r1, r2, |x, y| u64::from(x == y)),
+                Op::Call(id, args) => execute(p, *id, args.iter().map(|r| g(&regs, r)).collect()),
             };
             let val: u64 = val;
             if let Some(reg) = reg {
@@ -324,7 +558,7 @@ fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u
         let jump_to = match &block.exit {
             Branch::Jump(j) => j,
             Branch::Branch(r, j1, j2) => {
-                if g(&regs, r) != 0 {
+                if g(&regs, r) > 0 {
                     j1
                 } else {
                     j2
@@ -332,10 +566,10 @@ fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u
             }
         };
         match jump_to {
-            BranchPoint::Return(r) => return g(&regs, &r),
+            BranchPoint::Return(r) => return g(&regs, r),
             BranchPoint::Block(id, args) => {
                 block_id = *id;
-                params = args.iter().map(|r| g(&regs, &r)).collect();
+                params = args.iter().map(|r| g(&regs, r)).collect();
             }
         }
     }
@@ -355,6 +589,5 @@ fn pause() {
     let mut stdout = stdout();
     stdout.write_all(b"Press Enter to continue...").unwrap();
     stdout.flush().unwrap();
-    let mut _line = String::new();
-    stdin().read_line(&mut _line).unwrap();
+    stdin().read_line(&mut String::new()).unwrap();
 }
