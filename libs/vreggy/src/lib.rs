@@ -44,7 +44,8 @@ mod clean {
     #[derive(Debug, DebugPls)]
     pub enum Op {
         Constant(u64),
-        Copy(R),
+        //Copy(R),
+        Not(R),
         Add(R, R),
         Sub(R, R),
         Mul(R, R),
@@ -56,7 +57,8 @@ mod clean {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 Self::Constant(v) => write!(f, "{v}"),
-                Self::Copy(r) => write!(f, "{r}"),
+                //Self::Copy(r) => write!(f, "{r}"),
+                Self::Not(r) => write!(f, "not {r}"),
                 Self::Add(r1, r2) => write!(f, "{r1} + {r2}"),
                 Self::Sub(r1, r2) => write!(f, "{r1} - {r2}"),
                 Self::Mul(r1, r2) => write!(f, "{r1} * {r2}"),
@@ -381,6 +383,9 @@ impl<'a> Compiler<'a> {
                 let reg_args: Vec<_> = args.iter().map(|e| self.compile_expr(e)).collect();
                 let op = match func.as_ref() {
                     "add" => Op::Add(reg_args[0], reg_args[1]),
+                    "mul" => Op::Mul(reg_args[0], reg_args[1]),
+                    "eq" => Op::Cmp(reg_args[0], reg_args[1]),
+                    "not" => Op::Not(reg_args[0]),
                     f => panic!("Unrecognized function {f}"),
                 };
                 let r = self.bb.new_register();
@@ -403,7 +408,7 @@ impl<'a> Compiler<'a> {
                     let new_evaled = self.compile_parser_block(new_parser_block);
                     let new_block = mem::replace(&mut self.bb, old_block);
                     let new_vars = mem::replace(&mut self.vars, old_vars);
-                    let new_vars: Vec<_> = new_vars.into_iter().map(|(_, _, r)| r).collect();
+                    let new_vars = vars_to_args(new_vars);
                     (new_block, new_evaled, new_vars)
                 };
                 let (if_block, if_evaled, mut if_vars) = uwu(if_parser_block);
@@ -420,7 +425,7 @@ impl<'a> Compiler<'a> {
                     .finish_block_jump(else_block, BranchPoint::Block(endif_block_id, else_vars));
                 let beginif_block = mem::replace(&mut self.bb, endif_block);
                 let beginif_vars = mem::replace(&mut self.vars, endif_vars);
-                let beginif_vars: Vec<_> = beginif_vars.into_iter().map(|(_, _, r)| r).collect();
+                let beginif_vars = vars_to_args(beginif_vars);
                 self.pb.finish_block_branch(
                     beginif_block,
                     condition_reg,
@@ -429,12 +434,53 @@ impl<'a> Compiler<'a> {
                 );
                 evaled_reg
             }
-            ExprKind::While(_condition, _body, else_expr) => {
+            ExprKind::While(condition, body, else_expr) => {
                 assert!(else_expr.is_none());
-                todo!()
+                let (begin_block, begin_vars) = self.change_to_new_state();
+                let evaled_condition = self.compile_expr(condition);
+                let (condition_block, condition_vars) = self.change_to_new_state();
+                let _ill_get_to_it = self.compile_parser_block(body);
+                let (body_block, body_vars) = self.change_to_new_state();
+                let (begin_vars, condition_vars, body_vars) = (
+                    vars_to_args(begin_vars),
+                    vars_to_args(condition_vars),
+                    vars_to_args(body_vars),
+                );
+                self.pb.finish_block_jump(
+                    begin_block,
+                    BranchPoint::Block(condition_block.id, begin_vars),
+                );
+                let condition_block_id = condition_block.id;
+                self.pb.finish_block_branch(
+                    condition_block,
+                    evaled_condition,
+                    BranchPoint::Block(body_block.id, condition_vars.clone()),
+                    BranchPoint::Block(self.bb.id, condition_vars),
+                );
+                self.pb.finish_block_jump(
+                    body_block,
+                    BranchPoint::Block(condition_block_id, body_vars),
+                );
+                self.bb.unit_register()
             }
         }
     }
+    fn change_state(
+        &mut self,
+        state: (BlockBuilder, Vec<(&'a str, Mutability, Register)>),
+    ) -> (BlockBuilder, Vec<(&'a str, Mutability, Register)>) {
+        let old_block = mem::replace(&mut self.bb, state.0);
+        let old_vars = mem::replace(&mut self.vars, state.1);
+        (old_block, old_vars)
+    }
+    fn change_to_new_state(&mut self) -> (BlockBuilder, Vec<(&'a str, Mutability, Register)>) {
+        let x = self.make_child_scope();
+        self.change_state(x)
+    }
+}
+
+fn vars_to_args(vars: Vec<(&str, Mutability, Register)>) -> Vec<Register> {
+    vars.into_iter().map(|(_, _, r)| r).collect()
 }
 
 fn _fact() {
@@ -483,9 +529,9 @@ fn meow(pb: &ProgramBuilder) {
 
 fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u64>) -> u64 {
     loop {
-        //println!("Running block {block_id}");
-        //color!(&params);
-        //pause();
+        // println!("Running block {block_id}");
+        // color!(&params);
+        // pause();
         let block = p.get(&block_id).unwrap();
         let mut regs = HashMap::new();
         let g = |regs: &HashMap<Register, u64>, r: &Register| -> u64 {
@@ -502,7 +548,8 @@ fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u
             //color!(reg, op);
             let val = match op {
                 Op::Constant(v) => *v,
-                Op::Copy(r) => g(&regs, r),
+                //Op::Copy(r) => g(&regs, r),
+                Op::Not(r) => u64::from(g(&regs, r) == 0),
                 Op::Add(r1, r2) => op2(&regs, r1, r2, u64::wrapping_add),
                 Op::Sub(r1, r2) => op2(&regs, r1, r2, u64::wrapping_sub),
                 Op::Mul(r1, r2) => op2(&regs, r1, r2, u64::wrapping_mul),
