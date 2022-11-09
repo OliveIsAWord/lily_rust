@@ -38,6 +38,7 @@ pub enum StatementKind {
 pub enum ExprKind {
     Literal(Literal),
     Variable(Ident),
+    Assign(Ident, Box<Self>),
     Block(Block),
     If(Box<Self>, Block, Option<Box<Self>>),
     While(Box<Self>, Block, Option<Box<Self>>),
@@ -69,7 +70,7 @@ impl ExprKind {
     #[must_use]
     pub fn ends_with_semicolon(&self) -> bool {
         match self {
-            Self::Variable(_) | Self::Literal(_) | Self::Call(..) => true,
+            Self::Variable(_) | Self::Literal(_) | Self::Assign(..) | Self::Call(..) => true,
             Self::Block(_) => false,
             Self::If(_, _, else_expr) | Self::While(_, _, else_expr) => {
                 matches!(else_expr, Some(e) if e.ends_with_semicolon())
@@ -202,6 +203,9 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
                         .or_not(),
                 )
                 .map(|((cond, body), else_)| ExprKind::While(Box::new(cond), body, else_));
+            let assign = ident
+                .then_ignore(just_punc(Punctuation::Eq))
+                .then(expr.clone());
             let call = expr
                 .clone()
                 .separated_by(just_punc(Punctuation::Comma))
@@ -213,6 +217,7 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
             choice((
                 literal.map(ExprKind::Literal),
                 ident.map(ExprKind::Variable),
+                assign.map(|(var, e)| ExprKind::Assign(var, Box::new(e))),
                 block.clone().map(ExprKind::Block),
                 if_,
                 while_,

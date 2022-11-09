@@ -268,28 +268,23 @@ pub fn compile(body: &ParserBlock) {
 struct Compiler<'a> {
     pb: ProgramBuilder,
     bb: BlockBuilder,
-    vars: HashMap<&'a str, (Mutability, Register)>,
-    nonlocal_vars: Vec<HashMap<&'a str, (Mutability, Register)>>,
+    vars: Vec<(&'a str, Mutability, Register)>,
 }
 
 impl<'a> Compiler<'a> {
     fn new() -> Self {
         let mut pb = ProgramBuilder::new();
         let bb = pb.create_block();
-        let vars = HashMap::new();
-        let nonlocal_vars = vec![];
-        Self {
-            pb,
-            bb,
-            vars,
-            nonlocal_vars,
-        }
+        let vars = vec![];
+        Self { pb, bb, vars }
     }
-    fn scopes<'b>(&'b self) -> impl Iterator<Item = &HashMap<&'a str, (Mutability, Register)>> {
-        once(&self.vars).chain(self.nonlocal_vars.iter().rev())
+    fn scopes(&self) -> impl Iterator<Item = &(&'a str, Mutability, Register)> {
+        self.vars.iter().rev()
     }
-    fn get_var(&self, var: &str) -> (Mutability, Register) {
-        *self.scopes().find_map(|vars| vars.get(var)).unwrap()
+    fn get_var(&self, x: &str) -> (Mutability, Register) {
+        self.scopes()
+            .find_map(|&(var, m, r)| (var == x).then_some((m, r)))
+            .unwrap()
     }
     fn compile_func(&mut self, func: &'a ParserBlock) {
         for s in &func.statements {
@@ -313,8 +308,7 @@ impl<'a> Compiler<'a> {
             StatementKind::Item(_) => todo!("local items"),
             StatementKind::LetStatement(ident, mutability, val) => {
                 let r = self.compile_expr(val.as_ref().unwrap());
-                let prev_reg = self.vars.insert(ident, (*mutability, r));
-                assert!(prev_reg.is_none());
+                self.vars.push((ident, *mutability, r));
             }
             StatementKind::ExprStatement(e) => {
                 let r = self.compile_expr(e);
@@ -325,11 +319,7 @@ impl<'a> Compiler<'a> {
     }
     fn compile_parser_block(&mut self, block: &'a ParserBlock) -> Register {
         let ParserBlock { statements, tail } = block;
-        let is_new_scope = !self.vars.is_empty();
-        if is_new_scope {
-            let parent_vars = mem::take(&mut self.vars);
-            self.nonlocal_vars.push(parent_vars);
-        }
+        let old_vars_len = self.vars.len();
         for s in statements {
             self.compile_statement(s);
         }
@@ -341,10 +331,18 @@ impl<'a> Compiler<'a> {
                 null
             }
         };
-        if is_new_scope {
-            self.vars = self.nonlocal_vars.pop().unwrap();
-        }
+        debug_assert!(self.vars.len() >= old_vars_len);
+        self.vars.truncate(old_vars_len);
         r
+    }
+    fn make_child_scope(&mut self) -> (BlockBuilder, Vec<(&'a str, Mutability, Register)>) {
+        let mut bb = self.pb.create_block();
+        let vars = self
+            .vars
+            .iter()
+            .map(|&(var, m, _)| (var, m, bb.new_input()))
+            .collect();
+        (bb, vars)
     }
     fn compile_expr(&mut self, expr: &'a ExprKind) -> Register {
         //color!(expr, &self.vars, &self.nonlocal_vars);
@@ -359,9 +357,10 @@ impl<'a> Compiler<'a> {
             },
             ExprKind::Variable(v) => {
                 let r = self.get_var(v).1;
-                color!(&v, r, self.scopes().collect::<Vec<_>>());
+                color!(&v, r, &self.vars);
                 r
             }
+            ExprKind::Assign(_var, _expr) => todo!(),
             ExprKind::Call(func, args) => {
                 let func = match func.as_ref() {
                     ExprKind::Variable(s) => s,
@@ -378,100 +377,141 @@ impl<'a> Compiler<'a> {
             }
             ExprKind::Block(b) => self.compile_parser_block(b),
             ExprKind::If(condition, if_parser_block, else_expr) => {
+                let else_parser_block =
+                    if let ExprKind::Block(b) = else_expr.as_ref().unwrap().as_ref() {
+                        b
+                    } else {
+                        todo!("else expr")
+                    };
                 let condition_reg = self.compile_expr(condition);
-                let parent_scope: Vec<(&'a str, (Mutability, Register))> = {
-                    let mut flattened = HashMap::new();
-                    for (&var, &reg) in self.scopes().flatten() {
-                        flattened.entry(var).or_insert(reg);
-                    }
-                    flattened.into_iter().collect()
+                let mut uwu = |new_parser_block| {
+                    let (new_block, new_vars) = self.make_child_scope();
+                    let old_block = mem::replace(&mut self.bb, new_block);
+                    let old_vars = mem::replace(&mut self.vars, new_vars);
+                    let new_evaled = self.compile_parser_block(new_parser_block);
+                    let new_block = mem::replace(&mut self.bb, old_block);
+                    let new_vars = mem::replace(&mut self.vars, old_vars);
+                    let new_vars: Vec<_> = new_vars.into_iter().map(|(_, _, r)| r).collect();
+                    (new_block, new_evaled, new_vars)
                 };
-                let branch_args: Vec<_> = parent_scope.iter().map(|&(_, (_, r))| r).collect();
-                color!(&parent_scope);
-                fn create_branch_scope<'a>(
-                    parent_scope: &[(&'a str, (Mutability, Register))],
-                    bb: &mut BlockBuilder,
-                ) -> HashMap<&'a str, (Mutability, Register)> {
-                    parent_scope
-                        .iter()
-                        .copied()
-                        .map(|(var, (m, _))| (var, (m, bb.new_input())))
-                        .collect()
-                }
-                type Self_<'ignore> = Compiler<'ignore>;
-                fn create_branch_block<'c, T, F>(
-                    self_: &mut Self_<'c>,
-                    ast: &'c T,
-                    compiler_func: F,
-                    parent_scope: &[(&'c str, (Mutability, Register))],
-                ) -> (Register, BlockBuilder)
-                where
-                    F: FnOnce(&mut Self_<'c>, &'c T) -> Register,
-                {
-                    let old_block = mem::replace(&mut self_.bb, self_.pb.create_block());
-                    let new_block_vars = create_branch_scope(parent_scope, &mut self_.bb);
-                    color!(&new_block_vars);
-                    self_.nonlocal_vars.push(new_block_vars);
-                    assert_eq!(self_.nonlocal_vars.len(), 1);
-                    let r = compiler_func(self_, ast);
-                    assert_eq!(self_.nonlocal_vars.len(), 1);
-                    let new_block = mem::replace(&mut self_.bb, old_block);
-                    (r, new_block)
-                }
-                let (if_reg, if_block) = create_branch_block(
-                    self,
-                    if_parser_block,
-                    Self::compile_parser_block,
-                    &parent_scope,
-                );
-                color!(&if_block);
-                let if_vars = self.nonlocal_vars.pop().unwrap();
-                let if_vars: Vec<_> = parent_scope
-                    .iter()
-                    .map(|(var, _)| if_vars.get(var).unwrap().1)
-                    .chain(once(if_reg))
-                    .collect();
-                let (else_reg, else_block) = match else_expr {
-                    Some(e) => {
-                        create_branch_block(self, e.as_ref(), Self::compile_expr, &parent_scope)
-                    }
-                    None => {
-                        let mut bb = self.pb.create_block();
-                        for _ in 0..parent_scope.len() {
-                            let _ = bb.new_input();
-                        }
-                        let r = bb.unit_register();
-                        (r, bb)
-                    }
-                };
-                let else_vars = self.nonlocal_vars.pop().unwrap();
-                let else_vars: Vec<_> = parent_scope
-                    .iter()
-                    .map(|(var, _)| else_vars.get(var).unwrap().1)
-                    .chain(once(else_reg))
-                    .collect();
-                color!(&if_vars, &else_vars);
-                let start_if_block = mem::replace(&mut self.bb, self.pb.create_block());
+                let (if_block, if_evaled, mut if_vars) = uwu(if_parser_block);
+                let (else_block, else_evaled, mut else_vars) = uwu(else_parser_block);
+                let (mut endif_block, endif_vars) = self.make_child_scope();
+                let (if_block_id, else_block_id, endif_block_id) =
+                    (if_block.id, else_block.id, endif_block.id);
+                let evaled_reg = endif_block.new_input();
+                if_vars.push(if_evaled);
+                else_vars.push(else_evaled);
+                self.pb
+                    .finish_block_jump(if_block, BranchPoint::Block(endif_block_id, if_vars));
+                self.pb
+                    .finish_block_jump(else_block, BranchPoint::Block(endif_block_id, else_vars));
+                let beginif_block = mem::replace(&mut self.bb, endif_block);
+                let beginif_vars = mem::replace(&mut self.vars, endif_vars);
+                let beginif_vars: Vec<_> = beginif_vars.into_iter().map(|(_, _, r)| r).collect();
                 self.pb.finish_block_branch(
-                    start_if_block,
+                    beginif_block,
                     condition_reg,
-                    BranchPoint::Block(if_block.id, branch_args.clone()),
-                    BranchPoint::Block(else_block.id, branch_args),
+                    BranchPoint::Block(if_block_id, beginif_vars.clone()),
+                    BranchPoint::Block(else_block_id, beginif_vars),
                 );
-                let _ = self.bb.new_input();
-                let evaled_reg = self.bb.new_input();
-                self.pb.finish_block_jump(
-                    if_block,
-                    BranchPoint::Block(self.bb.id, if_vars),
-                );
-                self.pb.finish_block_jump(
-                    else_block,
-                    BranchPoint::Block(self.bb.id, else_vars),
-                );
-                //let new_vars = create_branch_scope(&parent_scope, &mut self.bb);
                 evaled_reg
             }
             ExprKind::While(..) => todo!(),
+            // ExprKind::If(condition, if_parser_block, else_expr) => {
+            //     let condition_reg = self.compile_expr(condition);
+            //     let parent_scope: Vec<(&'a str, (Mutability, Register))> = {
+            //         let mut flattened = HashMap::new();
+            //         for (&var, &reg) in self.scopes().flatten() {
+            //             flattened.entry(var).or_insert(reg);
+            //         }
+            //         flattened.into_iter().collect()
+            //     };
+            //     let branch_args: Vec<_> = parent_scope.iter().map(|&(_, (_, r))| r).collect();
+            //     color!(&parent_scope);
+            //     fn create_branch_scope<'a>(
+            //         parent_scope: &[(&'a str, (Mutability, Register))],
+            //         bb: &mut BlockBuilder,
+            //     ) -> HashMap<&'a str, (Mutability, Register)> {
+            //         parent_scope
+            //             .iter()
+            //             .copied()
+            //             .map(|(var, (m, _))| (var, (m, bb.new_input())))
+            //             .collect()
+            //     }
+            //     type Self_<'ignore> = Compiler<'ignore>;
+            //     fn create_branch_block<'c, T, F>(
+            //         self_: &mut Self_<'c>,
+            //         ast: &'c T,
+            //         compiler_func: F,
+            //         parent_scope: &[(&'c str, (Mutability, Register))],
+            //     ) -> (Register, BlockBuilder)
+            //     where
+            //         F: FnOnce(&mut Self_<'c>, &'c T) -> Register,
+            //     {
+            //         let old_block = mem::replace(&mut self_.bb, self_.pb.create_block());
+            //         let new_block_vars = create_branch_scope(parent_scope, &mut self_.bb);
+            //         color!(&new_block_vars);
+            //         self_.nonlocal_vars.push(new_block_vars);
+            //         assert_eq!(self_.nonlocal_vars.len(), 1);
+            //         let r = compiler_func(self_, ast);
+            //         assert_eq!(self_.nonlocal_vars.len(), 1);
+            //         let new_block = mem::replace(&mut self_.bb, old_block);
+            //         (r, new_block)
+            //     }
+            //     let (if_reg, if_block) = create_branch_block(
+            //         self,
+            //         if_parser_block,
+            //         Self::compile_parser_block,
+            //         &parent_scope,
+            //     );
+            //     color!(&if_block);
+            //     let if_vars = self.nonlocal_vars.pop().unwrap();
+            //     let if_vars: Vec<_> = parent_scope
+            //         .iter()
+            //         .map(|(var, _)| if_vars.get(var).unwrap().1)
+            //         .chain(once(if_reg))
+            //         .collect();
+            //     let (else_reg, else_block) = match else_expr {
+            //         Some(e) => {
+            //             create_branch_block(self, e.as_ref(), Self::compile_expr, &parent_scope)
+            //         }
+            //         None => {
+            //             let mut bb = self.pb.create_block();
+            //             for _ in 0..parent_scope.len() {
+            //                 let _ = bb.new_input();
+            //             }
+            //             let r = bb.unit_register();
+            //             (r, bb)
+            //         }
+            //     };
+            //     let else_vars = self.nonlocal_vars.pop().unwrap();
+            //     let else_vars: Vec<_> = parent_scope
+            //         .iter()
+            //         .map(|(var, _)| else_vars.get(var).unwrap().1)
+            //         .chain(once(else_reg))
+            //         .collect();
+            //     color!(&if_vars, &else_vars);
+            //     let start_if_block = mem::replace(&mut self.bb, self.pb.create_block());
+            //     self.pb.finish_block_branch(
+            //         start_if_block,
+            //         condition_reg,
+            //         BranchPoint::Block(if_block.id, branch_args.clone()),
+            //         BranchPoint::Block(else_block.id, branch_args),
+            //     );
+            //     let _ = self.bb.new_input();
+            //     let evaled_reg = self.bb.new_input();
+            //     self.pb.finish_block_jump(
+            //         if_block,
+            //         BranchPoint::Block(self.bb.id, if_vars),
+            //     );
+            //     self.pb.finish_block_jump(
+            //         else_block,
+            //         BranchPoint::Block(self.bb.id, else_vars),
+            //     );
+            //     //let new_vars = create_branch_scope(&parent_scope, &mut self.bb);
+            //     evaled_reg
+            // }
         }
     }
 }
