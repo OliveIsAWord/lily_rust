@@ -3,12 +3,12 @@ use std::fs::read_to_string;
 use dbg_pls::color;
 
 fn main() {
-    let sample = read_to_string("example2.rs").unwrap();
+    let sample = read_to_string("example3.rs").unwrap();
 
     let tokens = lexer::lex(&sample).unwrap();
     // println!("\n=== Tokens ===");
-    // for t in tokens.iter().map(|t| &t.kind) {
-    //     println!("{:?}", color(t));
+    // for (i, t) in tokens.iter().map(|t| &t.kind).enumerate() {
+    //     println!("{i} {:?}", color(t));
     // }
 
     let ast = parser::parse(&tokens).unwrap();
@@ -28,7 +28,7 @@ fn main() {
     let block = &main_.body;
     //println!("{:?}", color(block));
     println!("Compiling...");
-    let _metrocop = vreggy::compile(block);
+    vreggy::compile(block);
     //println!("=== Register Machine Instructions ===");
     //println!("{:?}", color(&metrocop));
 }

@@ -92,7 +92,7 @@ pub enum TypeKind {
 //     pub const UNIT: Self = Self::Tuple(vec![]);
 // }
 
-#[derive(Clone, Copy, Debug, DebugPls)]
+#[derive(Clone, Copy, Debug, DebugPls, Eq, PartialEq)]
 pub enum Mutability {
     Const,
     Mut,
@@ -216,8 +216,8 @@ fn item<'a>() -> impl Parser<Token, ItemKind, Error = Simple<Token>> + 'a {
                 );
             choice((
                 literal.map(ExprKind::Literal),
-                ident.map(ExprKind::Variable),
                 assign.map(|(var, e)| ExprKind::Assign(var, Box::new(e))),
+                ident.map(ExprKind::Variable),
                 block.clone().map(ExprKind::Block),
                 if_,
                 while_,
