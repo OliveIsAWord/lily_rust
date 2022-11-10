@@ -382,7 +382,7 @@ fn execute_inner(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params:
             let val = match op {
                 Op::Nop => 0,
                 Op::Constant(v) => *v,
-                //Op::Copy(r) => g(&regs, r),
+                Op::Copy(r) => g(&regs, r),
                 Op::Not(r) => u64::from(g(&regs, r) == 0),
                 Op::Add(r1, r2) => op2(&regs, r1, r2, u64::wrapping_add),
                 Op::Sub(r1, r2) => op2(&regs, r1, r2, u64::wrapping_sub),

@@ -19,11 +19,11 @@ impl Register {
     }
 }
 
-#[derive(Clone, Debug, DebugPls, Eq, PartialEq)]
+#[derive(Clone, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub enum Op {
     Nop,
     Constant(u64),
-    //Copy(R),
+    Copy(R),
     Not(R),
     Add(R, R),
     Sub(R, R),
@@ -38,6 +38,7 @@ impl Op {
         match self {
             Self::Nop
             | Self::Constant(_)
+            | Self::Copy(_)
             | Self::Not(_)
             | Self::Add(..)
             | Self::Sub(..)
@@ -49,6 +50,7 @@ impl Op {
     pub const fn is_uninhabited(&self) -> bool {
         match self {
             Self::Constant(_)
+            | Self::Copy(_)
             | Self::Not(_)
             | Self::Add(..)
             | Self::Sub(..)
@@ -121,7 +123,7 @@ impl Block {
         for (mut reg, mut op) in ops {
             match &mut op {
                 Op::Nop | Op::Constant(_) => (),
-                Op::Not(r) | Op::Print(r) => convert(&arg_map, r),
+                Op::Copy(r) | Op::Not(r) | Op::Print(r) => convert(&arg_map, r),
                 Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
                     convert(&arg_map, r1);
                     convert(&arg_map, r2);
@@ -227,7 +229,7 @@ impl fmt::Display for Op {
         match self {
             Self::Nop => write!(f, "nop"),
             Self::Constant(v) => write!(f, "{v}"),
-            //Self::Copy(r) => write!(f, "{r}"),
+            Self::Copy(r) => write!(f, "{r}"),
             Self::Not(r) => write!(f, "not {r}"),
             Self::Add(r1, r2) => write!(f, "{r1} + {r2}"),
             Self::Sub(r1, r2) => write!(f, "{r1} - {r2}"),

@@ -2,6 +2,7 @@
 use super::lir::{Block, BlockId, Branch, BranchPoint, Op, Program, Register};
 use super::{verify, verify_block};
 use dbg_pls::{color, DebugPls};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
@@ -36,8 +37,12 @@ fn optimize_program_pass(program: &mut Program) -> bool {
         remove_unused_inputs_pass,
     ];
     let mut flag = false;
-    for o in optimizers {
-        flag |= o(program);
+    for (i, o) in optimizers.into_iter().enumerate() {
+        let x = o(program);
+        if x {
+            println!("p{i}")
+        }
+        flag |= x;
         verify(program).unwrap();
     }
     flag
@@ -46,16 +51,21 @@ fn optimize_program_pass(program: &mut Program) -> bool {
 fn optimize_blocks_pass(program: &mut Program) -> bool {
     let optimizers = [
         const_propogation_pass,
+        common_node_elimination_pass,
         branch_on_not_pass,
         erase_unused_registers_pass,
         erase_useless_ops_pass,
         remove_nop_pass,
     ];
     let mut did_optimize = false;
-    for block in program.blocks.values_mut() {
+    for (i, block) in program.blocks.values_mut().enumerate() {
         let mut flag = false;
         for o in optimizers {
-            flag |= o(block);
+            let x = o(block);
+            if x {
+                println!("b{i}")
+            }
+            flag |= x;
             verify_block(block).unwrap();
         }
         did_optimize |= flag;
@@ -227,7 +237,7 @@ fn erase_unused_registers_pass(b: &mut Block) -> bool {
     for (reg, op) in &b.ops {
         match op {
             Op::Nop | Op::Constant(_) => (),
-            Op::Not(r) | Op::Print(r) => mark(&mut regs, r),
+            Op::Copy(r) | Op::Not(r) | Op::Print(r) => mark(&mut regs, r),
             Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
                 mark(&mut regs, r1);
                 mark(&mut regs, r2);
@@ -298,6 +308,14 @@ fn const_propogation_pass(b: &mut Block) -> bool {
         let eval = match op {
             Op::Nop | Op::Print(_) => None,
             Op::Constant(v) => Some(*v),
+            Op::Copy(r) => {
+                // Don't convert a Copy to a Constant, but still const-propogate its value.
+                // The Copy op is a renaming placeholder for signaling to the optimizer
+                if let Some(v) = g(regs, r) {
+                    const_evaled.insert(reg, v);
+                }
+                None
+            },
             Op::Not(r) => g(regs, r).map(|v| if v == 0 { 1 } else { 0 }),
             Op::Add(r1, r2) => op2(regs, r1, r2, u64::wrapping_add),
             Op::Sub(r1, r2) => op2(regs, r1, r2, u64::wrapping_sub),
@@ -323,13 +341,30 @@ fn const_propogation_pass(b: &mut Block) -> bool {
     did_optimize
 }
 
+fn common_node_elimination_pass(b: &mut Block) -> bool {
+    let mut did_optimize = false;
+    let mut nodes: HashMap<Op, Register> = HashMap::new();
+    for (reg, op) in b.ops.iter_mut().filter_map(|(r, op)| r.map(|r| (r, op))) {
+        if let Some(equal_reg) = nodes.insert(op.clone(), reg) {
+            assert_ne!(reg, equal_reg);
+            //color!(&op);
+            *op = Op::Copy(equal_reg);
+            did_optimize = true;
+        }
+    }
+
+    //color!(&b);
+    //color!(&nodes);
+    did_optimize
+}
+
 fn branch_on_not_pass(b: &mut Block) -> bool {
     //color!(&b);
     let Branch::Branch(r, bp1, bp2) = &mut b.exit else { return false; };
     let Some(Op::Not(not_r)) = b.ops
     .iter()
     .rev()
-    .find_map(|(reg, op)| (reg == &Some(*r)).then_some(op)) else  { return false; };
+    .find_map(|(reg, op)| (reg == &Some(*r)).then_some(op)) else { return false; };
     *r = *not_r;
     mem::swap(bp1, bp2);
     true
@@ -352,7 +387,7 @@ fn detect_unused_inputs(b: &Block) -> Vec<bool> {
     for (_, op) in &b.ops {
         match op {
             Op::Nop | Op::Constant(_) => (),
-            Op::Not(r) | Op::Print(r) => mark(u, r),
+            Op::Copy(r) | Op::Not(r) | Op::Print(r) => mark(u, r),
             Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
                 mark(u, r1);
                 mark(u, r2);
