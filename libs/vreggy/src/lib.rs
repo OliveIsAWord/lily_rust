@@ -1,8 +1,10 @@
 //#![allow(dead_code)]
 mod lir;
 mod optimizer;
+mod verifier;
 
 pub use optimizer::optimize;
+pub use verifier::{verify, verify_block};
 
 use dbg_pls::DebugPls;
 use lir::{Block, BlockId, Branch, BranchPoint, Op, Program, RegId, Register};

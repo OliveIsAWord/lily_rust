@@ -1,23 +1,26 @@
 #![allow(unused_imports)]
 use super::lir::{Block, BlockId, Branch, BranchPoint, Op, Program, Register};
+use super::{verify, verify_block};
 use dbg_pls::{color, DebugPls};
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
-const MAX_INLINE_LENGTH: usize = 3;
+const MAX_INLINE_LENGTH: usize = usize::MAX;
 
 pub fn optimize(program: &mut Program) -> bool {
+    verify(program).unwrap();
     let mut try_optimize = true;
     let mut did_optimize = false;
     let mut passes = 0;
     while try_optimize {
-        try_optimize = false;
-        try_optimize |= optimize_blocks_pass(program);
-        try_optimize |= optimize_program_pass(program);
-        if try_optimize {
+        let mut flag = false;
+        flag |= optimize_blocks_pass(program);
+        flag |= optimize_program_pass(program);
+        if flag {
             did_optimize = true;
             passes += 1;
         }
+        try_optimize = flag;
     }
     // yes we're doing this
     let plural = if passes == 1 { "" } else { "es" };
@@ -35,8 +38,29 @@ fn optimize_program_pass(program: &mut Program) -> bool {
     let mut flag = false;
     for o in optimizers {
         flag |= o(program);
+        verify(program).unwrap();
     }
     flag
+}
+
+fn optimize_blocks_pass(program: &mut Program) -> bool {
+    let optimizers = [
+        const_propogation_pass,
+        branch_on_not_pass,
+        erase_unused_registers_pass,
+        erase_useless_ops_pass,
+        remove_nop_pass,
+    ];
+    let mut did_optimize = false;
+    for block in program.blocks.values_mut() {
+        let mut flag = false;
+        for o in optimizers {
+            flag |= o(block);
+            verify_block(block).unwrap();
+        }
+        did_optimize |= flag;
+    }
+    did_optimize
 }
 
 fn inline_blocks_pass(program: &mut Program) -> bool {
@@ -45,7 +69,8 @@ fn inline_blocks_pass(program: &mut Program) -> bool {
         let inline_candidate = match &block.exit {
             Branch::Jump(BranchPoint::Block(id, _)) => {
                 let to_block = program.blocks.get(id).unwrap();
-                (to_block.ops.len() <= MAX_INLINE_LENGTH).then_some(*id)
+                (to_block.ops.len() <= MAX_INLINE_LENGTH && !to_block.can_jump_to(*id))
+                    .then_some(*id)
             }
             _ => None,
         };
@@ -157,53 +182,33 @@ fn remove_unused_inputs_pass(program: &mut Program) -> bool {
     }
     let cull_args = cull_args;
     if cull_args.is_empty() {
-        false
-    } else {
-        for (id, block) in &mut program.blocks {
-            let get_mask = |id| cull_args.get(id).map(|r| r.iter().copied());
-            let retain_by = |args: &mut Vec<Register>, id| {
-                get_mask(id).map(|mut retained| args.retain(|_| retained.next().unwrap()))
-            };
-            let retain_branch = |bp: &mut BranchPoint| {
-                if let BranchPoint::Block(id, args) = bp {
-                    let get_mask = |id| cull_args.get(id).map(|r| r.iter().copied());
-                    let retain_by = |args: &mut Vec<Register>, id| {
-                        get_mask(id).map(|mut retained| args.retain(|_| retained.next().unwrap()))
-                    };
-                    retain_by(args, id);
-                }
-            };
-            retain_by(&mut block.inputs, id);
-            // todo: call op
-            match &mut block.exit {
-                Branch::Jump(bp) => retain_branch(bp),
-                Branch::Branch(_, bp1, bp2) => {
-                    retain_branch(bp1);
-                    retain_branch(bp2);
-                }
+        return false;
+    }
+    for (id, block) in &mut program.blocks {
+        let get_mask = |id| cull_args.get(id).map(|r| r.iter().copied());
+        let retain_by = |args: &mut Vec<Register>, id| {
+            get_mask(id).map(|mut retained| args.retain(|_| retained.next().unwrap()))
+        };
+        let retain_branch = |bp: &mut BranchPoint| {
+            if let BranchPoint::Block(id, args) = bp {
+                let get_mask = |id| cull_args.get(id).map(|r| r.iter().copied());
+                let retain_by = |args: &mut Vec<Register>, id| {
+                    get_mask(id).map(|mut retained| args.retain(|_| retained.next().unwrap()))
+                };
+                retain_by(args, id);
+            }
+        };
+        retain_by(&mut block.inputs, id);
+        // todo: call op
+        match &mut block.exit {
+            Branch::Jump(bp) => retain_branch(bp),
+            Branch::Branch(_, bp1, bp2) => {
+                retain_branch(bp1);
+                retain_branch(bp2);
             }
         }
-        true
     }
-}
-
-fn optimize_blocks_pass(program: &mut Program) -> bool {
-    let optimizers = [
-        const_propogation_pass,
-        branch_on_not_pass,
-        erase_unused_registers_pass,
-        erase_useless_ops_pass,
-        remove_nop_pass,
-    ];
-    let mut did_optimize = false;
-    for block in program.blocks.values_mut() {
-        let mut flag = false;
-        for o in optimizers {
-            flag |= o(block);
-        }
-        did_optimize |= flag;
-    }
-    did_optimize
+    true
 }
 
 fn remove_nop_pass(b: &mut Block) -> bool {

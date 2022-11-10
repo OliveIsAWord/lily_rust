@@ -79,6 +79,17 @@ pub struct Block {
 }
 
 impl Block {
+    pub(super) fn can_jump_to(&self, block_id: BlockId) -> bool {
+        let cans = |bp: &BranchPoint| {
+            matches!(bp,
+                BranchPoint::Block(id, _) if block_id == *id
+            )
+        };
+        match &self.exit {
+            Branch::Jump(bp) => cans(bp),
+            Branch::Branch(_, bp1, bp2) => cans(bp1) || cans(bp2),
+        }
+    }
     pub(super) fn inline(&mut self, jump_point: Self) {
         let mut reg_accum: i32 = self
             .ops
