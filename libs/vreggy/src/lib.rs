@@ -1,120 +1,15 @@
-#![allow(dead_code, unused_imports)]
-use dbg_pls::{color, DebugPls};
-use parser::{Block as ParserBlock, ExprKind, Ident, Literal, Mutability, StatementKind};
+//#![allow(dead_code)]
+mod lir;
+mod optimizer;
+
+pub use optimizer::optimize;
+
+use dbg_pls::DebugPls;
+use lir::{Block, BlockId, Branch, BranchPoint, Op, Program, RegId, Register};
+use parser::{Block as ParserBlock, ExprKind, Literal, Mutability, StatementKind};
 use std::collections::HashMap;
 use std::fmt;
-use std::iter::once;
 use std::mem;
-use std::num::NonZeroI32;
-
-type RegId = NonZeroI32;
-type BlockId = u32;
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct Register(RegId);
-
-impl Register {
-    #[must_use]
-    pub const fn is_input(self) -> bool {
-        self.0.get() < 0
-    }
-}
-
-impl DebugPls for Register {
-    fn fmt(&self, f: dbg_pls::Formatter<'_>) {
-        f.debug_tuple_struct("Register")
-            .field(&self.0.get())
-            .finish();
-    }
-}
-
-impl fmt::Display for Register {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.is_input() {
-            write!(f, "i{}", -self.0.get())
-        } else {
-            write!(f, "r{}", self.0.get())
-        }
-    }
-}
-
-mod clean {
-    use super::*;
-    type R = Register;
-    #[derive(Debug, DebugPls)]
-    pub enum Op {
-        Constant(u64),
-        //Copy(R),
-        Not(R),
-        Add(R, R),
-        Sub(R, R),
-        Mul(R, R),
-        Cmp(R, R),
-        Call(BlockId, Vec<R>),
-    }
-
-    impl fmt::Display for Op {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                Self::Constant(v) => write!(f, "{v}"),
-                //Self::Copy(r) => write!(f, "{r}"),
-                Self::Not(r) => write!(f, "not {r}"),
-                Self::Add(r1, r2) => write!(f, "{r1} + {r2}"),
-                Self::Sub(r1, r2) => write!(f, "{r1} - {r2}"),
-                Self::Mul(r1, r2) => write!(f, "{r1} * {r2}"),
-                Self::Cmp(r1, r2) => write!(f, "{r1} == {r2}"),
-                Self::Call(id, regs) => {
-                    write!(f, "block_{id}(")?;
-                    for (i, r) in regs.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{r}")?;
-                    }
-                    write!(f, ")")
-                }
-            }
-        }
-    }
-}
-pub use clean::*;
-
-#[derive(Debug, DebugPls)]
-enum Branch {
-    Jump(BranchPoint),
-    Branch(Register, BranchPoint, BranchPoint),
-}
-
-#[derive(Debug, DebugPls)]
-pub enum BranchPoint {
-    Block(BlockId, Vec<Register>),
-    Return(Register),
-}
-
-impl fmt::Display for BranchPoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Block(id, regs) => {
-                write!(f, "jump block_{id}(")?;
-                for (i, r) in regs.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{r}")?;
-                }
-                write!(f, ")")
-            }
-            Self::Return(r) => write!(f, "return {r}"),
-        }
-    }
-}
-
-#[derive(Debug, DebugPls)]
-struct Block {
-    inputs: Vec<Register>,
-    ops: Vec<(Option<Register>, Op)>,
-    exit: Branch,
-}
 
 #[derive(Debug, DebugPls)]
 struct BlockBuilder {
@@ -134,9 +29,6 @@ impl BlockBuilder {
             inputs: vec![],
             ops: vec![],
         }
-    }
-    pub const fn id(&self) -> BlockId {
-        self.id
     }
     pub fn new_input(&mut self) -> Register {
         let reg_id = self
@@ -161,11 +53,19 @@ impl BlockBuilder {
         self.assign(r, Op::Constant(69));
         r
     }
-    pub fn assign(&mut self, r: Register, op: Op) {
-        debug_assert!(!r.is_input());
-        self.ops.push((Some(r), op));
+    pub fn assign(&mut self, reg: Register, op: Op) {
+        debug_assert!(!reg.is_input());
+        debug_assert!(op != Op::Nop);
+        self.ops.push((Some(reg), op));
+    }
+    pub fn add_nop(&mut self) {
+        self.ops.push((None, Op::Nop));
+    }
+    pub fn _add_print(&mut self, reg: Register) {
+        self.ops.push((None, Op::Print(reg)));
     }
     pub fn erase_register(&mut self, reg: Register) -> bool {
+        debug_assert!(!reg.is_input());
         self.ops
             .iter_mut()
             .rev()
@@ -194,9 +94,9 @@ impl ProgramBuilder {
         self.block_id_accum += 1;
         BlockBuilder::new(id)
     }
-    pub fn set_entry(&mut self, id: BlockId) {
-        self.entry_block = Some(id);
-    }
+    // pub fn set_entry(&mut self, id: BlockId) {
+    //     self.entry_block = Some(id);
+    // }
     pub fn finish_block(&mut self, bb: BlockBuilder, exit: Branch) {
         let BlockBuilder {
             inputs, ops, id, ..
@@ -221,50 +121,17 @@ impl ProgramBuilder {
 
 impl fmt::Display for ProgramBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(entry_id) = self.entry_block {
-            writeln!(f, "entry = block_{entry_id}()")?;
-        }
-        let mut blocks: Vec<_> = self.blocks.iter().collect();
-        blocks.sort_by_key(|b| b.0);
-        let mut is_first_block = true;
-        for (id, block) in blocks {
-            if !is_first_block {
-                writeln!(f)?;
-            }
-            is_first_block = false;
-            write!(f, "block_{id}(")?;
-            for (i, r) in block.inputs.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{r}")?;
-            }
-            write!(f, "):")?; // ):
-            for (reg, ops) in &block.ops {
-                write!(f, "\n    ")?;
-                match reg {
-                    Some(r) => write!(f, "{r}")?,
-                    None => write!(f, "_")?,
-                }
-                write!(f, " = {ops}")?;
-            }
-            write!(f, "\n    ")?;
-            match &block.exit {
-                Branch::Jump(j) => write!(f, "{j}")?,
-                Branch::Branch(r, j1, j2) => write!(f, "branch {r} {{ {j1} }} else {{ {j2} }}")?,
-            }
-        }
-        Ok(())
+        Program::fmt_internal(self.entry_block.unwrap_or(0), &self.blocks, f)
     }
 }
 
-pub fn compile(body: &ParserBlock) {
-    //_fact();
+pub fn compile(body: &ParserBlock) -> Program {
     let mut compiler = Compiler::new();
     compiler.compile_func(body);
-    compiler.pb.set_entry(42);
-    println!("{}", compiler.pb);
-    meow(&compiler.pb);
+    Program {
+        entry: 42,
+        blocks: compiler.pb.blocks,
+    }
 }
 
 struct Compiler<'a> {
@@ -364,11 +231,11 @@ impl<'a> Compiler<'a> {
                 Literal::String(_) => todo!(),
             },
             ExprKind::Variable(v) => {
-                let r = self.get_var(v).1;
-                color!(&v, r, &self.vars);
-                r
+                self.get_var(v).1
+                //color!(&v, r, &self.vars);
             }
             ExprKind::Assign(var, expr) => {
+                self.bb.add_nop();
                 let new_r = self.compile_expr(expr);
                 let (m, r) = self.get_var_mut(var);
                 assert!(m == Mutability::Mut, "assigning value to non-mut variable");
@@ -382,10 +249,12 @@ impl<'a> Compiler<'a> {
                 };
                 let reg_args: Vec<_> = args.iter().map(|e| self.compile_expr(e)).collect();
                 let op = match func.as_ref() {
+                    "not" => Op::Not(reg_args[0]),
                     "add" => Op::Add(reg_args[0], reg_args[1]),
+                    "sub" => Op::Sub(reg_args[0], reg_args[1]),
                     "mul" => Op::Mul(reg_args[0], reg_args[1]),
                     "eq" => Op::Cmp(reg_args[0], reg_args[1]),
-                    "not" => Op::Not(reg_args[0]),
+                    "print" => Op::Print(reg_args[0]),
                     f => panic!("Unrecognized function {f}"),
                 };
                 let r = self.bb.new_register();
@@ -483,51 +352,13 @@ fn vars_to_args(vars: Vec<(&str, Mutability, Register)>) -> Vec<Register> {
     vars.into_iter().map(|(_, _, r)| r).collect()
 }
 
-fn _fact() {
-    let mut pb = ProgramBuilder::new();
-    let mut bb1 = pb.create_block();
-    let i0 = bb1.new_input();
-    let r0 = bb1.new_register();
-    let r1 = bb1.new_register();
-    let r2 = bb1.new_register();
-    bb1.assign(r0, Op::Constant(0));
-    bb1.assign(r1, Op::Cmp(i0, r0));
-    bb1.assign(r2, Op::Constant(1));
-    let mut bb2 = pb.create_block();
-    let bb1_id = bb1.id();
-    pb.finish_block_branch(
-        bb1,
-        r1,
-        BranchPoint::Return(r2),
-        BranchPoint::Block(bb2.id(), vec![i0]),
-    );
-    let i0 = bb2.new_input();
-    let r0 = bb2.new_register();
-    let r1 = bb2.new_register();
-    let r2 = bb2.new_register();
-    let r3 = bb2.new_register();
-    bb2.assign(r0, Op::Constant(1));
-    bb2.assign(r1, Op::Sub(i0, r0));
-    bb2.assign(r2, Op::Call(bb1_id, vec![r1]));
-    bb2.assign(r3, Op::Mul(i0, r2));
-    pb.finish_block_jump(bb2, BranchPoint::Return(r3));
-    let mut bb3 = pb.create_block();
-    let r0 = bb3.new_register();
-    bb3.assign(r0, Op::Constant(5));
-    pb.set_entry(bb3.id());
-    pb.finish_block_jump(bb3, BranchPoint::Block(bb1_id, vec![r0]));
-    println!("{}", pb);
-    meow(&pb);
-}
-
-fn meow(pb: &ProgramBuilder) {
+pub fn execute(p: &Program) {
     println!("Executing...");
-    let entry_id = pb.entry_block.unwrap();
-    let val = execute(&pb.blocks, entry_id, vec![]);
+    let val = execute_inner(&p.blocks, p.entry, vec![]);
     println!("Terminated with {val}");
 }
 
-fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u64>) -> u64 {
+fn execute_inner(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u64>) -> u64 {
     loop {
         // println!("Running block {block_id}");
         // color!(&params);
@@ -547,6 +378,7 @@ fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u
         for (reg, op) in &block.ops {
             //color!(reg, op);
             let val = match op {
+                Op::Nop => 0,
                 Op::Constant(v) => *v,
                 //Op::Copy(r) => g(&regs, r),
                 Op::Not(r) => u64::from(g(&regs, r) == 0),
@@ -554,9 +386,15 @@ fn execute(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u
                 Op::Sub(r1, r2) => op2(&regs, r1, r2, u64::wrapping_sub),
                 Op::Mul(r1, r2) => op2(&regs, r1, r2, u64::wrapping_mul),
                 Op::Cmp(r1, r2) => op2(&regs, r1, r2, |x, y| u64::from(x == y)),
-                Op::Call(id, args) => execute(p, *id, args.iter().map(|r| g(&regs, r)).collect()),
+                // Op::Call(id, args) => {
+                //     execute_inner(p, *id, args.iter().map(|r| g(&regs, r)).collect())
+                // }
+                Op::Print(r) => {
+                    let x = g(&regs, r);
+                    println!("Printing: {x}");
+                    0
+                }
             };
-            let val: u64 = val;
             if let Some(reg) = reg {
                 let prev_value = regs.insert(*reg, val);
                 debug_assert!(prev_value.is_none());

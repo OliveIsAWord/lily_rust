@@ -28,7 +28,14 @@ fn main() {
     let block = &main_.body;
     //println!("{:?}", color(block));
     println!("Compiling...");
-    vreggy::compile(block);
-    //println!("=== Register Machine Instructions ===");
-    //println!("{:?}", color(&metrocop));
+    let mut ir = vreggy::compile(block);
+    println!("=== Register Machine Instructions ===");
+    println!("{}", ir);
+    if vreggy::optimize(&mut ir) {
+        println!("=== Optimized ===");
+        println!("{}", ir);
+    } else {
+        println!("Could not optimize further.");
+    }
+    vreggy::execute(&ir);
 }
