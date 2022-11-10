@@ -58,7 +58,7 @@ impl BlockBuilder {
         debug_assert!(op != Op::Nop);
         self.ops.push((Some(reg), op));
     }
-    pub fn add_nop(&mut self) {
+    pub fn _add_nop(&mut self) {
         self.ops.push((None, Op::Nop));
     }
     pub fn _add_print(&mut self, reg: Register) {
@@ -125,6 +125,7 @@ impl fmt::Display for ProgramBuilder {
     }
 }
 
+#[must_use]
 pub fn compile(body: &ParserBlock) -> Program {
     let mut compiler = Compiler::new();
     compiler.compile_func(body);
@@ -235,7 +236,6 @@ impl<'a> Compiler<'a> {
                 //color!(&v, r, &self.vars);
             }
             ExprKind::Assign(var, expr) => {
-                self.bb.add_nop();
                 let new_r = self.compile_expr(expr);
                 let (m, r) = self.get_var_mut(var);
                 assert!(m == Mutability::Mut, "assigning value to non-mut variable");

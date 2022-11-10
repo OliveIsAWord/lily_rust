@@ -3,7 +3,7 @@ use std::fs::read_to_string;
 use dbg_pls::color;
 
 fn main() {
-    let sample = read_to_string("example4.rs").unwrap();
+    let sample = read_to_string("example5.rs").unwrap();
 
     let tokens = lexer::lex(&sample).unwrap();
     // println!("\n=== Tokens ===");

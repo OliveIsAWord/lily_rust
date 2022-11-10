@@ -46,6 +46,17 @@ impl Op {
             Self::Print(_) => false,
         }
     }
+    pub const fn is_uninhabited(&self) -> bool {
+        match self {
+            Self::Constant(_)
+            | Self::Not(_)
+            | Self::Add(..)
+            | Self::Sub(..)
+            | Self::Mul(..)
+            | Self::Cmp(..) => false,
+            Self::Nop | Self::Print(_) => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, DebugPls)]
@@ -69,7 +80,13 @@ pub struct Block {
 
 impl Block {
     pub(super) fn inline(&mut self, jump_point: Self) {
-        let mut reg_accum: i32 = self.ops.iter().filter_map(|&(r, _)| r.map(|r| r.0.get())).max().unwrap_or(1).abs();
+        let mut reg_accum: i32 = self
+            .ops
+            .iter()
+            .filter_map(|&(r, _)| r.map(|r| r.0.get()))
+            .max()
+            .unwrap_or(1)
+            .abs();
         let mut new_register = || {
             reg_accum += 1;
             Register(RegId::new(reg_accum).unwrap())
@@ -87,7 +104,7 @@ impl Block {
         let mut arg_map: HashMap<_, _> = inputs.into_iter().zip(jump_args).collect();
         let convert = |arg_map: &HashMap<_, _>, r: &mut Register| {
             if let Some(&new_r) = arg_map.get(r) {
-                *r = new_r
+                *r = new_r;
             }
         };
         for (mut reg, mut op) in ops {
@@ -155,13 +172,16 @@ impl Program {
                 write!(f, "{r}")?;
             }
             write!(f, "):")?; // ):
-            for (reg, ops) in &block.ops {
+            for (reg, op) in &block.ops {
                 write!(f, "\n    ")?;
-                match reg {
-                    Some(r) => write!(f, "{r}")?,
-                    None => write!(f, "_")?,
+                if !op.is_uninhabited() {
+                    match reg {
+                        Some(r) => write!(f, "{r}")?,
+                        None => write!(f, "_")?,
+                    }
+                    write!(f, " = ")?;
                 }
-                write!(f, " = {ops}")?;
+                write!(f, "{op}")?;
             }
             write!(f, "\n    ")?;
             match &block.exit {
