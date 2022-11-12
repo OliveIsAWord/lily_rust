@@ -52,18 +52,20 @@ fn optimize_blocks_pass(program: &mut Program) -> bool {
     let optimizers = [
         const_propogation_pass,
         common_node_elimination_pass,
+        remove_copy_pass,
         branch_on_not_pass,
         erase_unused_registers_pass,
         erase_useless_ops_pass,
         remove_nop_pass,
     ];
     let mut did_optimize = false;
-    for (i, block) in program.blocks.values_mut().enumerate() {
+    for (id, block) in &mut program.blocks {
         let mut flag = false;
-        for o in optimizers {
+        for (i, o) in optimizers.into_iter().enumerate() {
             let x = o(block);
             if x {
-                println!("b{i}")
+                println!("b{i}");
+                println!("{id} {block}");
             }
             flag |= x;
             verify_block(block).unwrap();
@@ -227,6 +229,28 @@ fn remove_nop_pass(b: &mut Block) -> bool {
     b.ops.len() < old_len
 }
 
+fn remove_copy_pass(b: &mut Block) -> bool {
+    let mut did_optimize = false;
+    let mut copy_map: HashMap<Register, Register> = HashMap::new();
+    let replace_copy = |copy_map: &HashMap<Register, Register>, r: &mut Register| {
+        if let Some(&r_copy) = copy_map.get(&*r) {
+            //println!("Meow! {r} {r_copy}");
+            *r = r_copy;
+        }
+    };
+    for (r, op) in &mut b.ops {
+        visit_op(op, |r| replace_copy(&copy_map, r));
+        let Some(r_dst) = r else { continue; };
+        let Op::Copy(r_src) = op else { continue; };
+        copy_map.insert(*r_dst, *r_src);
+        *r = None;
+        *op = Op::Nop;
+        did_optimize = true;
+    }
+    visit_branch(&mut b.exit, |r| replace_copy(&copy_map, r));
+    did_optimize
+}
+
 fn erase_unused_registers_pass(b: &mut Block) -> bool {
     let mut regs: HashMap<Register, bool> = HashMap::new();
     let mark = |regs: &mut HashMap<Register, bool>, r: &Register| {
@@ -315,7 +339,7 @@ fn const_propogation_pass(b: &mut Block) -> bool {
                     const_evaled.insert(reg, v);
                 }
                 None
-            },
+            }
             Op::Not(r) => g(regs, r).map(|v| if v == 0 { 1 } else { 0 }),
             Op::Add(r1, r2) => op2(regs, r1, r2, u64::wrapping_add),
             Op::Sub(r1, r2) => op2(regs, r1, r2, u64::wrapping_sub),
@@ -417,4 +441,37 @@ fn detect_unused_inputs(b: &Block) -> Vec<bool> {
         }
     }
     used
+}
+
+fn visit_op(op: &mut Op, mut f: impl FnMut(&mut Register)) {
+    match op {
+        Op::Nop | Op::Constant(_) => (),
+        Op::Copy(r) | Op::Not(r) | Op::Print(r) => f(r),
+        Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
+            f(r1);
+            f(r2);
+        }
+    }
+}
+
+fn visit_branch(branch: &mut Branch, mut f: impl FnMut(&mut Register) + Copy) {
+    match branch {
+        Branch::Jump(bp) => visit_branchpoint(bp, f),
+        Branch::Branch(r, bp1, bp2) => {
+            f(r);
+            visit_branchpoint(bp1, f);
+            visit_branchpoint(bp2, f);
+        }
+    }
+}
+
+fn visit_branchpoint(bp: &mut BranchPoint, mut f: impl FnMut(&mut Register)) {
+    match bp {
+        BranchPoint::Block(_, args) => {
+            for r in args {
+                f(r)
+            }
+        }
+        BranchPoint::Return(r) => f(r),
+    }
 }

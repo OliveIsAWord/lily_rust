@@ -162,6 +162,43 @@ pub struct Program {
     pub blocks: HashMap<BlockId, Block>,
 }
 
+impl Block {
+    pub(super) fn fmt_internal(
+        &self,
+        id: Option<BlockId>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        write!(f, "block")?;
+        if let Some(id) = id {
+            write!(f, "_{id}")?;
+        }
+        write!(f, "(")?;
+        for (i, r) in self.inputs.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{r}")?;
+        }
+        writeln!(f, "):")?; // ):
+        for (reg, op) in &self.ops {
+            write!(f, "    ")?;
+            if !op.is_uninhabited() {
+                match reg {
+                    Some(r) => write!(f, "{r}")?,
+                    None => write!(f, "_")?,
+                }
+                write!(f, " = ")?;
+            }
+            writeln!(f, "{op}")?;
+        }
+        write!(f, "    ")?;
+        match &self.exit {
+            Branch::Jump(j) => write!(f, "{j}"),
+            Branch::Branch(r, j1, j2) => write!(f, "branch {r} {{ {j1} }} else {{ {j2} }}"),
+        }
+    }
+}
+
 impl Program {
     pub(super) fn fmt_internal(
         entry_id: BlockId,
@@ -265,6 +302,12 @@ impl fmt::Display for BranchPoint {
             }
             Self::Return(r) => write!(f, "return {r}"),
         }
+    }
+}
+
+impl fmt::Display for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_internal(None, f)
     }
 }
 
