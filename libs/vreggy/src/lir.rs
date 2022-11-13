@@ -188,6 +188,8 @@ impl Block {
                     None => write!(f, "_")?,
                 }
                 write!(f, " = ")?;
+            } else if let Some(r) = reg {
+                write!(f, "{r} ?= ")?;
             }
             writeln!(f, "{op}")?;
         }
@@ -214,30 +216,7 @@ impl Program {
                 writeln!(f)?;
             }
             is_first_block = false;
-            write!(f, "block_{id}(")?;
-            for (i, r) in block.inputs.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{r}")?;
-            }
-            write!(f, "):")?; // ):
-            for (reg, op) in &block.ops {
-                write!(f, "\n    ")?;
-                if !op.is_uninhabited() {
-                    match reg {
-                        Some(r) => write!(f, "{r}")?,
-                        None => write!(f, "_")?,
-                    }
-                    write!(f, " = ")?;
-                }
-                write!(f, "{op}")?;
-            }
-            write!(f, "\n    ")?;
-            match &block.exit {
-                Branch::Jump(j) => write!(f, "{j}")?,
-                Branch::Branch(r, j1, j2) => write!(f, "branch {r} {{ {j1} }} else {{ {j2} }}")?,
-            }
+            block.fmt_internal(Some(*id), f)?;
         }
         Ok(())
     }

@@ -305,12 +305,8 @@ fn erase_unused_registers_pass(b: &mut Block) -> bool {
 
 fn erase_useless_ops_pass(b: &mut Block) -> bool {
     let mut did_optimize = false;
-    for op in b
-        .ops
-        .iter_mut()
-        .filter_map(|(reg, op)| reg.is_none().then_some(op))
-    {
-        if op.is_pure() {
+    for (reg, op) in &mut b.ops {
+        if reg.is_none() && op.is_pure() && op != &Op::Nop {
             *op = Op::Nop;
             did_optimize = true;
         }
