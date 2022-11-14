@@ -1,13 +1,15 @@
-//#![allow(dead_code)]
+#![allow(unused_imports)]
 mod lir;
 mod optimizer;
 mod verifier;
 
-pub use optimizer::optimize;
+pub use optimizer::{optimize, optimize_interactive};
 pub use verifier::{verify, verify_block};
 
-use dbg_pls::DebugPls;
-use lir::{Block, BlockId, Branch, BranchPoint, Op, Program, RegId, Register};
+use dbg_pls::{color, DebugPls, pretty};
+use lir::{
+    Block, BlockId, Branch, BranchPoint, Op, Program, Provenance, RegId, Register, ValueKind,
+};
 use parser::{Block as ParserBlock, ExprKind, Literal, Mutability, StatementKind};
 use std::collections::HashMap;
 use std::fmt;
@@ -52,12 +54,12 @@ impl BlockBuilder {
         let reg_id = self.reg_accum.checked_add(1).and_then(RegId::new).unwrap();
         self.reg_accum = reg_id.get();
         let r = Register(reg_id);
-        self.assign(r, Op::Constant(69));
+        self.assign(r, Op::Constant(ValueKind::Integer(69)));
         r
     }
     pub fn assign(&mut self, reg: Register, op: Op) {
         debug_assert!(!reg.is_input());
-        debug_assert!(op != Op::Nop);
+        //debug_assert!(!op.is_uninhabited());
         self.ops.push((Some(reg), op));
     }
     pub fn _add_nop(&mut self) {
@@ -170,11 +172,7 @@ impl<'a> Compiler<'a> {
         }
         let return_reg = match &func.tail {
             Some(e) => self.compile_expr(e),
-            None => {
-                let null = self.bb.new_register();
-                self.bb.assign(null, Op::Constant(69));
-                null
-            }
+            None => self.bb.unit_register(),
         };
         let bb = mem::replace(&mut self.bb, self.pb.create_block());
         self.pb
@@ -203,11 +201,7 @@ impl<'a> Compiler<'a> {
         }
         let r = match tail {
             Some(e) => self.compile_expr(e),
-            None => {
-                let null = self.bb.new_register();
-                self.bb.assign(null, Op::Constant(0));
-                null
-            }
+            None => self.bb.unit_register(),
         };
         debug_assert!(self.vars.len() >= old_vars_len);
         self.vars.truncate(old_vars_len);
@@ -223,12 +217,13 @@ impl<'a> Compiler<'a> {
         (bb, vars)
     }
     fn compile_expr(&mut self, expr: &'a ExprKind) -> Register {
-        //color!(expr, &self.vars, &self.nonlocal_vars);
+        //color!(expr, &self.vars, &self.bb);
+        //pause();
         match expr {
             ExprKind::Literal(lit) => match lit {
                 Literal::Integer(i) => {
                     let r = self.bb.new_register();
-                    self.bb.assign(r, Op::Constant(*i));
+                    self.bb.assign(r, Op::Constant(ValueKind::Integer(*i)));
                     r
                 }
                 Literal::String(_) => todo!(),
@@ -255,8 +250,15 @@ impl<'a> Compiler<'a> {
                     "add" => Op::Add(reg_args[0], reg_args[1]),
                     "sub" => Op::Sub(reg_args[0], reg_args[1]),
                     "mul" => Op::Mul(reg_args[0], reg_args[1]),
+                    "div" => Op::Div(reg_args[0], reg_args[1]),
+                    "mod" => Op::Mod(reg_args[0], reg_args[1]),
                     "eq" => Op::Cmp(reg_args[0], reg_args[1]),
                     "print" => Op::Print(reg_args[0]),
+                    "print_slice" => Op::PrintSlice(reg_args[0], reg_args[1]),
+                    "alloc" => Op::Allocate(reg_args[0]),
+                    "dealloc" => Op::Deallocate(reg_args[0]),
+                    "get" => Op::ReadSlice(reg_args[0], reg_args[1]),
+                    "set" => Op::WriteSlice(reg_args[0], reg_args[1], reg_args[2]),
                     f => panic!("Unrecognized function {f}"),
                 };
                 let r = self.bb.new_register();
@@ -265,6 +267,7 @@ impl<'a> Compiler<'a> {
             }
             ExprKind::Block(b) => self.compile_parser_block(b),
             ExprKind::If(condition, if_parser_block, else_expr) => {
+                // TODO: god, rewrite this code
                 let else_parser_block =
                     if let ExprKind::Block(b) = else_expr.as_ref().unwrap().as_ref() {
                         b
@@ -306,32 +309,31 @@ impl<'a> Compiler<'a> {
                 evaled_reg
             }
             ExprKind::While(condition, body, else_expr) => {
+                // Warning: imperative code.
                 assert!(else_expr.is_none());
                 let (begin_block, begin_vars) = self.change_to_new_state();
+                let condition_id = self.bb.id;
                 let evaled_condition = self.compile_expr(condition);
                 let (condition_block, condition_vars) = self.change_to_new_state();
+                let body_id = self.bb.id;
                 let _ill_get_to_it = self.compile_parser_block(body);
                 let (body_block, body_vars) = self.change_to_new_state();
+                let endwhile_id = self.bb.id;
                 let (begin_vars, condition_vars, body_vars) = (
                     vars_to_args(begin_vars),
                     vars_to_args(condition_vars),
                     vars_to_args(body_vars),
                 );
-                self.pb.finish_block_jump(
-                    begin_block,
-                    BranchPoint::Block(condition_block.id, begin_vars),
-                );
-                let condition_block_id = condition_block.id;
+                self.pb
+                    .finish_block_jump(begin_block, BranchPoint::Block(condition_id, begin_vars));
                 self.pb.finish_block_branch(
                     condition_block,
                     evaled_condition,
-                    BranchPoint::Block(body_block.id, condition_vars.clone()),
-                    BranchPoint::Block(self.bb.id, condition_vars),
+                    BranchPoint::Block(body_id, condition_vars.clone()),
+                    BranchPoint::Block(endwhile_id, condition_vars),
                 );
-                self.pb.finish_block_jump(
-                    body_block,
-                    BranchPoint::Block(condition_block_id, body_vars),
-                );
+                self.pb
+                    .finish_block_jump(body_block, BranchPoint::Block(condition_id, body_vars));
                 self.bb.unit_register()
             }
         }
@@ -360,33 +362,63 @@ pub fn execute(p: &Program) {
     println!("Terminated with {val}");
 }
 
-fn execute_inner(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params: Vec<u64>) -> u64 {
+fn execute_inner(
+    p: &HashMap<BlockId, Block>,
+    mut block_id: BlockId,
+    mut params: Vec<ValueKind>,
+) -> u64 {
+    use std::num::NonZeroUsize;
+    let mut heap_memory: HashMap<Provenance, Box<[Option<ValueKind>]>> = HashMap::new();
+    let mut provenance_iota = NonZeroUsize::new(1).unwrap();
+    let mut new_provenance = || {
+        let p = provenance_iota;
+        provenance_iota = provenance_iota
+            .checked_add(1)
+            .expect("ran out of heap pointers");
+        Provenance(p)
+    };
     loop {
-        // println!("Running block {block_id}");
+        //println!("Running block {block_id}");
         // color!(&params);
         // pause();
         let block = p.get(&block_id).unwrap();
-        let mut regs = HashMap::new();
-        let g = |regs: &HashMap<Register, u64>, r: &Register| -> u64 {
-            r.0.get()
-                .checked_add(1)
-                .and_then(i32::checked_neg)
-                .and_then(|x| usize::try_from(x).ok())
-                .map_or_else(|| *regs.get(r).unwrap(), |i| params[i])
+        let mut regs: HashMap<Register, ValueKind> = block
+            .inputs
+            .iter()
+            .zip(&params)
+            .map(|(&r, &v)| (r, v))
+            .collect();
+        let g = |regs: &HashMap<Register, ValueKind>, r| *regs.get(r).unwrap();
+        let gi = |regs: &HashMap<Register, ValueKind>, r| match g(regs, r) {
+            ValueKind::Integer(i) => i,
+            ValueKind::Pointer(p) => panic!("expected integer, found pointer {p:?}"),
         };
-        let op2 = |regs: &HashMap<Register, u64>, r1, r2, op: fn(u64, u64) -> u64| {
-            op(g(regs, r1), g(regs, r2))
+        let gp = |regs: &HashMap<Register, ValueKind>, r| match g(regs, r) {
+            ValueKind::Pointer(p) => p,
+            ValueKind::Integer(i) => panic!("expected pointer, found integer {i}"),
         };
+        let op2 = |regs: &HashMap<Register, ValueKind>, r1, r2, op: fn(u64, u64) -> u64| {
+            let i1 = gi(regs, r1);
+            let i2 = gi(regs, r2);
+            ValueKind::Integer(op(i1, i2))
+        };
+        let uninhabited = ValueKind::Integer(0);
         for (reg, op) in &block.ops {
-            //color!(reg, op);
+            //println!("{} = {}", pretty(reg), color(op));
             let val = match op {
-                Op::Nop => 0,
+                Op::Nop => uninhabited,
                 Op::Constant(v) => *v,
                 Op::Copy(r) => g(&regs, r),
-                Op::Not(r) => u64::from(g(&regs, r) == 0),
+                Op::Not(r) => ValueKind::Integer(u64::from(gi(&regs, r) == 0)),
                 Op::Add(r1, r2) => op2(&regs, r1, r2, u64::wrapping_add),
                 Op::Sub(r1, r2) => op2(&regs, r1, r2, u64::wrapping_sub),
                 Op::Mul(r1, r2) => op2(&regs, r1, r2, u64::wrapping_mul),
+                Op::Div(r1, r2) => op2(&regs, r1, r2, |a, b| {
+                    a.checked_div(b).expect("division by zero")
+                }),
+                Op::Mod(r1, r2) => op2(&regs, r1, r2, |a, b| {
+                    a.checked_rem(b).expect("division by zero")
+                }),
                 Op::Cmp(r1, r2) => op2(&regs, r1, r2, |x, y| u64::from(x == y)),
                 // Op::Call(id, args) => {
                 //     execute_inner(p, *id, args.iter().map(|r| g(&regs, r)).collect())
@@ -394,8 +426,59 @@ fn execute_inner(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params:
                 Op::Print(r) => {
                     let x = g(&regs, r);
                     println!("Printing: {x}");
-                    0
+                    uninhabited
                 }
+                Op::PrintSlice(r1, r2) => {
+                    let p = gp(&regs, r1);
+                    let len = gi(&regs, r2);
+                    let len = usize::try_from(len).unwrap();
+                    let slice = &heap_memory.get(&p).expect("use after free")[..len];
+                    print!("Printing: [");
+                    for (i, x) in slice.iter().enumerate() {
+                        if i > 0 {
+                            print!(", ");
+                        }
+                        let x = x.expect("printed uninitialized memory");
+                        print!("{x}");
+                    }
+                    println!("]");
+                    uninhabited
+                }
+                Op::Allocate(r) => {
+                    let p = new_provenance();
+                    let size = gi(&regs, r);
+                    let size = usize::try_from(size).unwrap();
+                    heap_memory.insert(p, vec![None; size].into_boxed_slice());
+                    ValueKind::Pointer(p)
+                }
+                Op::Deallocate(r) => {
+                    let p = gp(&regs, r);
+                    let _ = heap_memory.remove(&p).expect("double free");
+                    uninhabited
+                }
+                Op::ReadSlice(r1, r2) => {
+                    let p = gp(&regs, r1);
+                    let i = gi(&regs, r2);
+                    //println!("{p:?} {i}");
+                    //color!(&heap_memory);
+                    let i = usize::try_from(i).unwrap();
+                    let slice = heap_memory.get(&p).expect("use after free");
+                    slice
+                        .get(i)
+                        .expect(&format!(
+                            "out of bounds access: {i} >= {}. {slice:?}",
+                            slice.len()
+                        ))
+                        .expect("reading uninitialized memory")
+                }
+                Op::WriteSlice(r1, r2, r3) => {
+                    let p = gp(&regs, r1);
+                    let i = gi(&regs, r2);
+                    let i = usize::try_from(i).unwrap();
+                    let slice = heap_memory.get_mut(&p).expect("use after free");
+                    *slice.get_mut(i).expect("out of bounds access") = Some(g(&regs, r3));
+                    uninhabited
+                } //e => todo!("{:?}", e),
             };
             if let Some(reg) = reg {
                 let prev_value = regs.insert(*reg, val);
@@ -406,7 +489,7 @@ fn execute_inner(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params:
         let jump_to = match &block.exit {
             Branch::Jump(j) => j,
             Branch::Branch(r, j1, j2) => {
-                if g(&regs, r) > 0 {
+                if gi(&regs, r) > 0 {
                     j1
                 } else {
                     j2
@@ -414,7 +497,14 @@ fn execute_inner(p: &HashMap<BlockId, Block>, mut block_id: BlockId, mut params:
             }
         };
         match jump_to {
-            BranchPoint::Return(r) => return g(&regs, r),
+            BranchPoint::Return(r) => {   
+                if !heap_memory.is_empty() {
+                    let len = heap_memory.len();
+                    let s = if len == 1 {""} else {"s"};
+                    println!("Leaked {len} allocation{s}.");
+                }
+                return gi(&regs, r);
+            }
             BranchPoint::Block(id, args) => {
                 block_id = *id;
                 params = args.iter().map(|r| g(&regs, r)).collect();

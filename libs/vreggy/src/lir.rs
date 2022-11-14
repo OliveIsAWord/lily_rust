@@ -2,11 +2,19 @@ use dbg_pls::DebugPls;
 use std::collections::HashMap;
 use std::fmt;
 use std::mem;
-use std::num::NonZeroI32;
+use std::num::{NonZeroI32, NonZeroUsize};
+
+pub type ProvenanceId = NonZeroUsize;
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct Provenance(pub(super) ProvenanceId);
+
+#[derive(Clone, Copy, Debug, DebugPls, Eq, Hash, PartialEq)]
+pub enum ValueKind {
+    Integer(u64),
+    Pointer(Provenance),
+}
 
 pub type RegId = NonZeroI32;
-pub type BlockId = u32;
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Register(pub(super) RegId);
 
@@ -22,15 +30,22 @@ impl Register {
 #[derive(Clone, Debug, DebugPls, Eq, Hash, PartialEq)]
 pub enum Op {
     Nop,
-    Constant(u64),
+    Constant(ValueKind),
     Copy(R),
     Not(R),
     Add(R, R),
     Sub(R, R),
     Mul(R, R),
+    Div(R, R),
+    Mod(R, R),
     Cmp(R, R),
     //Call(BlockId, Vec<R>),
     Print(R),
+    PrintSlice(R, R),
+    Allocate(R),
+    Deallocate(R),
+    ReadSlice(R, R),
+    WriteSlice(R, R, R),
 }
 
 impl Op {
@@ -43,8 +58,14 @@ impl Op {
             | Self::Add(..)
             | Self::Sub(..)
             | Self::Mul(..)
-            | Self::Cmp(..) => true,
-            Self::Print(_) => false,
+            | Self::Div(..)
+            | Self::Mod(..)
+            | Self::Cmp(..)
+            | Self::Allocate(_)
+            | Self::ReadSlice(..) => true,
+            Self::Print(_) | Self::PrintSlice(..) | Self::Deallocate(_) | Self::WriteSlice(..) => {
+                false
+            }
         }
     }
     pub const fn is_uninhabited(&self) -> bool {
@@ -55,8 +76,22 @@ impl Op {
             | Self::Add(..)
             | Self::Sub(..)
             | Self::Mul(..)
-            | Self::Cmp(..) => false,
-            Self::Nop | Self::Print(_) => true,
+            | Self::Div(..)
+            | Self::Mod(..)
+            | Self::Cmp(..)
+            | Self::Allocate(_)
+            | Self::ReadSlice(..) => false,
+            Self::Nop
+            | Self::Print(_)
+            | Self::PrintSlice(..)
+            | Self::Deallocate(_)
+            | Self::WriteSlice(..) => true,
+        }
+    }
+    pub const fn is_idempotent(&self) -> bool {
+        match self {
+            Self::Allocate(_) | Self::ReadSlice(..) | Self::WriteSlice(..) => false,
+            _ => true,
         }
     }
 }
@@ -73,6 +108,87 @@ pub enum BranchPoint {
     Return(R),
 }
 
+pub fn visit_op(op: &mut Op, mut f: impl FnMut(&mut Register)) {
+    match op {
+        Op::Nop | Op::Constant(_) => (),
+        Op::Copy(r) | Op::Not(r) | Op::Print(r) | Op::Allocate(r) | Op::Deallocate(r) => f(r),
+        Op::Add(r1, r2)
+        | Op::Sub(r1, r2)
+        | Op::Mul(r1, r2)
+        | Op::Div(r1, r2)
+        | Op::Mod(r1, r2)
+        | Op::Cmp(r1, r2)
+        | Op::PrintSlice(r1, r2)
+        | Op::ReadSlice(r1, r2) => {
+            f(r1);
+            f(r2);
+        }
+        Op::WriteSlice(r1, r2, r3) => {
+            f(r1);
+            f(r2);
+            f(r3);
+        }
+    }
+}
+
+pub fn visit_branch(branch: &mut Branch, mut f: impl FnMut(&mut Register)) {
+    match branch {
+        Branch::Jump(bp) => visit_branchpoint(bp, f),
+        Branch::Branch(r, bp1, bp2) => {
+            f(r);
+            visit_branchpoint(bp1, &mut f);
+            visit_branchpoint(bp2, f);
+        }
+    }
+}
+
+pub fn visit_branchpoint(bp: &mut BranchPoint, mut f: impl FnMut(&mut Register)) {
+    match bp {
+        BranchPoint::Block(_, args) => args.into_iter().for_each(f),
+        BranchPoint::Return(r) => f(r),
+    }
+}
+
+pub fn visit_op_immut(op: &Op, mut f: impl FnMut(Register)) {
+    match op {
+        Op::Nop | Op::Constant(_) => (),
+        Op::Copy(r) | Op::Not(r) | Op::Print(r) | Op::Allocate(r) | Op::Deallocate(r) => f(*r),
+        Op::Add(r1, r2)
+        | Op::Sub(r1, r2)
+        | Op::Mul(r1, r2)
+        | Op::Div(r1, r2)
+        | Op::Mod(r1, r2)
+        | Op::Cmp(r1, r2)
+        | Op::PrintSlice(r1, r2)
+        | Op::ReadSlice(r1, r2) => {
+            f(*r1);
+            f(*r2);
+        }
+        Op::WriteSlice(r1, r2, r3) => {
+            f(*r1);
+            f(*r2);
+            f(*r3);
+        }
+    }
+}
+pub fn visit_branch_immut(branch: &Branch, mut f: impl FnMut(Register)) {
+    match branch {
+        Branch::Jump(bp) => visit_branchpoint_immut(bp, f),
+        Branch::Branch(r, bp1, bp2) => {
+            f(*r);
+            visit_branchpoint_immut(bp1, &mut f);
+            visit_branchpoint_immut(bp2, f);
+        }
+    }
+}
+pub fn visit_branchpoint_immut(bp: &BranchPoint, mut f: impl FnMut(Register)) {
+    match bp {
+        BranchPoint::Block(_, args) => args.iter().copied().for_each(f),
+        BranchPoint::Return(r) => f(*r),
+    }
+}
+
+pub type BlockId = u32;
 #[derive(Clone, Debug, DebugPls)]
 pub struct Block {
     pub(super) inputs: Vec<R>,
@@ -121,14 +237,7 @@ impl Block {
             }
         };
         for (mut reg, mut op) in ops {
-            match &mut op {
-                Op::Nop | Op::Constant(_) => (),
-                Op::Copy(r) | Op::Not(r) | Op::Print(r) => convert(&arg_map, r),
-                Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
-                    convert(&arg_map, r1);
-                    convert(&arg_map, r2);
-                }
-            }
+            visit_op(&mut op, |r| convert(&arg_map, r));
             if let Some(r) = &mut reg {
                 let new_reg = new_register();
                 arg_map.insert(*r, new_reg);
@@ -136,22 +245,7 @@ impl Block {
             }
             self.ops.push((reg, op));
         }
-        let convert_branchpoint = |bp: &mut BranchPoint| match bp {
-            BranchPoint::Block(_, args) => {
-                for r in args {
-                    convert(&arg_map, r);
-                }
-            }
-            BranchPoint::Return(r) => convert(&arg_map, r),
-        };
-        match &mut exit {
-            Branch::Jump(bp) => convert_branchpoint(bp),
-            Branch::Branch(r, bp1, bp2) => {
-                convert(&arg_map, r);
-                convert_branchpoint(bp1);
-                convert_branchpoint(bp2);
-            }
-        }
+        visit_branch(&mut exit, |r| convert(&arg_map, r));
         self.exit = exit;
     }
 }
@@ -222,11 +316,28 @@ impl Program {
     }
 }
 
+impl DebugPls for Provenance {
+    fn fmt(&self, f: dbg_pls::Formatter<'_>) {
+        f.debug_tuple_struct("Provenance")
+            .field(&self.0.get())
+            .finish();
+    }
+}
+
 impl DebugPls for Register {
     fn fmt(&self, f: dbg_pls::Formatter<'_>) {
         f.debug_tuple_struct("Register")
             .field(&self.0.get())
             .finish();
+    }
+}
+
+impl fmt::Display for ValueKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Integer(i) => write!(f, "{i}"),
+            Self::Pointer(_) => write!(f, "[ptr]"),
+        }
     }
 }
 
@@ -250,6 +361,8 @@ impl fmt::Display for Op {
             Self::Add(r1, r2) => write!(f, "{r1} + {r2}"),
             Self::Sub(r1, r2) => write!(f, "{r1} - {r2}"),
             Self::Mul(r1, r2) => write!(f, "{r1} * {r2}"),
+            Self::Div(r1, r2) => write!(f, "{r1} / {r2}"),
+            Self::Mod(r1, r2) => write!(f, "{r1} % {r2}"),
             Self::Cmp(r1, r2) => write!(f, "{r1} == {r2}"),
             // Self::Call(id, regs) => {
             //     write!(f, "block_{id}(")?;
@@ -262,6 +375,11 @@ impl fmt::Display for Op {
             //     write!(f, ")")
             // }
             Self::Print(r) => write!(f, "print {r}"),
+            Self::PrintSlice(r1, r2) => write!(f, "print_slice({r1}, {r2})"),
+            Self::Allocate(r) => write!(f, "alloc {r}"),
+            Self::Deallocate(r) => write!(f, "dealloc {r}"),
+            Self::ReadSlice(src, i) => write!(f, "{src}[{i}]"),
+            Self::WriteSlice(src, i, val) => write!(f, "{src}[{i}] = {val}"),
         }
     }
 }

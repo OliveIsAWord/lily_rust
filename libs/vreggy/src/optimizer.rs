@@ -1,5 +1,8 @@
 #![allow(unused_imports)]
-use super::lir::{Block, BlockId, Branch, BranchPoint, Op, Program, Register};
+use super::lir::{
+    visit_branch, visit_branch_immut, visit_branchpoint, visit_branchpoint_immut, visit_op,
+    visit_op_immut, Block, BlockId, Branch, BranchPoint, Op, Program, Register, ValueKind,
+};
 use super::{verify, verify_block};
 use dbg_pls::{color, DebugPls};
 use std::collections::hash_map::Entry;
@@ -7,6 +10,71 @@ use std::collections::{HashMap, HashSet};
 use std::mem;
 
 const MAX_INLINE_LENGTH: usize = usize::MAX;
+
+const PROGRAM_OPTIMIZATIONS: &[fn(&mut Program) -> bool] = &[
+    inline_blocks_pass,
+    inline_jumps_pass,
+    remove_dead_blocks_pass,
+    remove_unused_inputs_pass,
+];
+const BLOCK_OPTIMIZATIONS: &[fn(&mut Block) -> bool] = &[
+    const_propogation_pass,
+    common_node_elimination_pass,
+    remove_copy_pass,
+    branch_on_not_pass,
+    erase_unused_registers_pass,
+    erase_useless_ops_pass,
+    remove_nop_pass,
+];
+
+pub fn optimize_interactive(program: &mut Program) {
+    let input = || {
+        use std::io::{stdin, stdout, Write};
+        let mut stdout = stdout();
+        stdout.write_all(b"> ").unwrap();
+        stdout.flush().unwrap();
+        let mut s = String::new();
+        stdin().read_line(&mut s).unwrap();
+        s
+    };
+    loop {
+        let (porb, i): (bool, usize) = loop {
+            let buffer = input();
+            let s = buffer.trim();
+            let Some(first) = s.chars().next() else {
+                continue;
+            };
+            let porb = match first {
+                'p' => true,
+                'b' => false,
+                'l' => {
+                    println!("{}", &program);
+                    continue;
+                }
+                'e' => return,
+                _ => {
+                    eprintln!("Could not parse command.");
+                    continue;
+                }
+            };
+            let Ok(i) = s[1..].parse() else {
+                eprintln!("Could not parse index `{}`.", &s[1..]);
+                continue;
+            };
+            break (porb, i);
+        };
+        if porb && PROGRAM_OPTIMIZATIONS[i](program) {
+            println!("{}", &program);
+        } else {
+            let o = BLOCK_OPTIMIZATIONS[i];
+            for (id, block) in &mut program.blocks {
+                if o(block) {
+                    println!("{} {}", id, block);
+                }
+            }
+        }
+    }
+}
 
 pub fn optimize(program: &mut Program) -> bool {
     verify(program).unwrap();
@@ -30,18 +98,12 @@ pub fn optimize(program: &mut Program) -> bool {
 }
 
 fn optimize_program_pass(program: &mut Program) -> bool {
-    let optimizers = [
-        inline_blocks_pass,
-        inline_jumps_pass,
-        remove_dead_blocks_pass,
-        remove_unused_inputs_pass,
-    ];
     let mut flag = false;
-    for (i, o) in optimizers.into_iter().enumerate() {
+    for (_i, o) in PROGRAM_OPTIMIZATIONS.iter().enumerate() {
         let x = o(program);
-        if x {
-            println!("p{i}")
-        }
+        // if x {
+        //     println!("p{i}")
+        // }
         flag |= x;
         verify(program).unwrap();
     }
@@ -49,24 +111,15 @@ fn optimize_program_pass(program: &mut Program) -> bool {
 }
 
 fn optimize_blocks_pass(program: &mut Program) -> bool {
-    let optimizers = [
-        const_propogation_pass,
-        common_node_elimination_pass,
-        remove_copy_pass,
-        branch_on_not_pass,
-        erase_unused_registers_pass,
-        erase_useless_ops_pass,
-        remove_nop_pass,
-    ];
     let mut did_optimize = false;
-    for (id, block) in &mut program.blocks {
+    for (_id, block) in &mut program.blocks {
         let mut flag = false;
-        for (i, o) in optimizers.into_iter().enumerate() {
+        for (_i, o) in BLOCK_OPTIMIZATIONS.iter().enumerate() {
             let x = o(block);
-            if x {
-                println!("b{i}");
-                println!("{id} {block}");
-            }
+            // if x {
+            //     println!("b{i}");
+            //     println!("{id} {block}");
+            // }
             flag |= x;
             verify_block(block).unwrap();
         }
@@ -258,35 +311,13 @@ fn erase_unused_registers_pass(b: &mut Block) -> bool {
             *r = false;
         }
     };
-    for (reg, op) in &b.ops {
-        match op {
-            Op::Nop | Op::Constant(_) => (),
-            Op::Copy(r) | Op::Not(r) | Op::Print(r) => mark(&mut regs, r),
-            Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
-                mark(&mut regs, r1);
-                mark(&mut regs, r2);
-            }
-        }
+    for (reg, op) in &mut b.ops {
+        visit_op(op, |r| mark(&mut regs, r));
         if let Some(r) = reg {
             regs.insert(*r, true);
         }
     }
-    let mark_branchpoint = |regs: &mut HashMap<Register, bool>, bp: &BranchPoint| match bp {
-        BranchPoint::Block(_, args) => {
-            for r in args {
-                mark(regs, r);
-            }
-        }
-        BranchPoint::Return(r) => mark(regs, r),
-    };
-    match &b.exit {
-        Branch::Jump(bp) => mark_branchpoint(&mut regs, bp),
-        Branch::Branch(r, bp1, bp2) => {
-            mark(&mut regs, r);
-            mark_branchpoint(&mut regs, bp1);
-            mark_branchpoint(&mut regs, bp2);
-        }
-    }
+    visit_branch(&mut b.exit, |r| mark(&mut regs, r));
     let unused_regs: HashSet<_> = regs
         .into_iter()
         .filter_map(|(r, b)| b.then_some(r))
@@ -326,8 +357,17 @@ fn const_propogation_pass(b: &mut Block) -> bool {
         };
         let regs = &const_evaled;
         let eval = match op {
-            Op::Nop | Op::Print(_) => None,
-            Op::Constant(v) => Some(*v),
+            Op::Nop
+            | Op::Print(_)
+            | Op::PrintSlice(..)
+            | Op::Allocate(_)
+            | Op::Deallocate(_)
+            | Op::ReadSlice(_, _)
+            | Op::WriteSlice(_, _, _) => None,
+            Op::Constant(v) => match v {
+                ValueKind::Integer(i) => Some(*i),
+                ValueKind::Pointer(_) => None,
+            },
             Op::Copy(r) => {
                 // Don't convert a Copy to a Constant, but still const-propogate its value.
                 // The Copy op is a renaming placeholder for signaling to the optimizer
@@ -340,12 +380,18 @@ fn const_propogation_pass(b: &mut Block) -> bool {
             Op::Add(r1, r2) => op2(regs, r1, r2, u64::wrapping_add),
             Op::Sub(r1, r2) => op2(regs, r1, r2, u64::wrapping_sub),
             Op::Mul(r1, r2) => op2(regs, r1, r2, u64::wrapping_mul),
+            Op::Div(r1, r2) => op2(&regs, r1, r2, |a, b| {
+                a.checked_div(b).expect("division by zero")
+            }),
+            Op::Mod(r1, r2) => op2(&regs, r1, r2, |a, b| {
+                a.checked_rem(b).expect("division by zero")
+            }),
             Op::Cmp(r1, r2) => op2(regs, r1, r2, |x, y| u64::from(x == y)),
         };
         if let Some(eval) = eval {
             const_evaled.insert(reg, eval);
             if !matches!(op, Op::Constant(_)) {
-                *op = Op::Constant(eval);
+                *op = Op::Constant(ValueKind::Integer(eval));
                 did_optimize = true;
             }
         }
@@ -364,7 +410,11 @@ fn const_propogation_pass(b: &mut Block) -> bool {
 fn common_node_elimination_pass(b: &mut Block) -> bool {
     let mut did_optimize = false;
     let mut nodes: HashMap<Op, Register> = HashMap::new();
-    for (reg, op) in b.ops.iter_mut().filter_map(|(r, op)| r.map(|r| (r, op))) {
+    let iter = b.ops.iter_mut().filter_map(|(r, op)| match *r {
+        Some(r) if op.is_idempotent() => Some((r, op)),
+        _ => None,
+    });
+    for (reg, op) in iter {
         if let Some(equal_reg) = nodes.insert(op.clone(), reg) {
             assert_ne!(reg, equal_reg);
             //color!(&op);
@@ -372,14 +422,10 @@ fn common_node_elimination_pass(b: &mut Block) -> bool {
             did_optimize = true;
         }
     }
-
-    //color!(&b);
-    //color!(&nodes);
     did_optimize
 }
 
 fn branch_on_not_pass(b: &mut Block) -> bool {
-    //color!(&b);
     let Branch::Branch(r, bp1, bp2) = &mut b.exit else { return false; };
     let Some(Op::Not(not_r)) = b.ops
     .iter()
@@ -398,76 +444,15 @@ fn detect_unused_inputs(b: &Block) -> Vec<bool> {
         .enumerate()
         .map(|(index, input)| (input, index))
         .collect();
-    let mark = |used: &mut [bool], r| {
-        if let Some(&i) = input_map.get(r) {
+    let mark = |used: &mut [bool], r: Register| {
+        if let Some(&i) = input_map.get(&r) {
             used[i] = true;
         }
     };
     let u = used.as_mut();
     for (_, op) in &b.ops {
-        match op {
-            Op::Nop | Op::Constant(_) => (),
-            Op::Copy(r) | Op::Not(r) | Op::Print(r) => mark(u, r),
-            Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
-                mark(u, r1);
-                mark(u, r2);
-            }
-        }
+        visit_op_immut(op, |r| mark(u, r));
     }
-    let mark_branchpoint = |used: &mut [bool], bp: &BranchPoint| match bp {
-        BranchPoint::Block(_, args) => {
-            for r in args {
-                if let Some(&i) = input_map.get(r) {
-                    used[i] = true;
-                }
-            }
-        }
-        BranchPoint::Return(r) => {
-            if let Some(&i) = input_map.get(r) {
-                used[i] = true;
-            }
-        }
-    };
-    match &b.exit {
-        Branch::Jump(bp) => mark_branchpoint(u, bp),
-        Branch::Branch(r, bp1, bp2) => {
-            mark(u, r);
-            mark_branchpoint(u, bp1);
-            mark_branchpoint(u, bp2);
-        }
-    }
+    visit_branch_immut(&b.exit, |r| mark(u, r));
     used
-}
-
-fn visit_op(op: &mut Op, mut f: impl FnMut(&mut Register)) {
-    match op {
-        Op::Nop | Op::Constant(_) => (),
-        Op::Copy(r) | Op::Not(r) | Op::Print(r) => f(r),
-        Op::Add(r1, r2) | Op::Sub(r1, r2) | Op::Mul(r1, r2) | Op::Cmp(r1, r2) => {
-            f(r1);
-            f(r2);
-        }
-    }
-}
-
-fn visit_branch(branch: &mut Branch, mut f: impl FnMut(&mut Register) + Copy) {
-    match branch {
-        Branch::Jump(bp) => visit_branchpoint(bp, f),
-        Branch::Branch(r, bp1, bp2) => {
-            f(r);
-            visit_branchpoint(bp1, f);
-            visit_branchpoint(bp2, f);
-        }
-    }
-}
-
-fn visit_branchpoint(bp: &mut BranchPoint, mut f: impl FnMut(&mut Register)) {
-    match bp {
-        BranchPoint::Block(_, args) => {
-            for r in args {
-                f(r)
-            }
-        }
-        BranchPoint::Return(r) => f(r),
-    }
 }

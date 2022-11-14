@@ -3,7 +3,8 @@ use std::fs::read_to_string;
 use dbg_pls::color;
 
 fn main() {
-    let sample = read_to_string("example5.rs").unwrap();
+    let sample = read_to_string("rule110.rs").unwrap();
+    //let sample = read_to_string("nested_loops.rs").unwrap();
 
     let tokens = lexer::lex(&sample).unwrap();
     // println!("\n=== Tokens ===");
@@ -31,6 +32,8 @@ fn main() {
     let mut ir = vreggy::compile(block);
     println!("=== Register Machine Instructions ===");
     println!("{}", ir);
+    vreggy::verify(&ir).unwrap();
+    //vreggy::optimize_interactive(&mut ir);
     if vreggy::optimize(&mut ir) {
         println!("=== Optimized ===");
         println!("{}", ir);
