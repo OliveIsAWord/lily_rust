@@ -1,0 +1,2 @@
+# it is so annoying that unstable rustfmt settings require a nightly compiler
+wrap_comments = true

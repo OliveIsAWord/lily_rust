@@ -1,12 +1,14 @@
 #![allow(unused_imports)]
 mod lir;
+mod modify_handle;
 mod optimizer;
 mod verifier;
 
+pub use modify_handle::ModifyHandle;
 pub use optimizer::{optimize, optimize_interactive};
 pub use verifier::{verify, verify_block};
 
-use dbg_pls::{color, DebugPls, pretty};
+use dbg_pls::{color, pretty, DebugPls};
 use lir::{
     Block, BlockId, Branch, BranchPoint, Op, Program, Provenance, RegId, Register, ValueKind,
 };
@@ -497,10 +499,10 @@ fn execute_inner(
             }
         };
         match jump_to {
-            BranchPoint::Return(r) => {   
+            BranchPoint::Return(r) => {
                 if !heap_memory.is_empty() {
                     let len = heap_memory.len();
-                    let s = if len == 1 {""} else {"s"};
+                    let s = if len == 1 { "" } else { "s" };
                     println!("Leaked {len} allocation{s}.");
                 }
                 return gi(&regs, r);
@@ -512,14 +514,6 @@ fn execute_inner(
         }
     }
 }
-
-// fn foo() {
-//     let mut h: HashMap<String, String> = HashMap::new();
-//     h.insert(42.to_string(), false.to_string());
-//     let f = |map: &HashMap<String, String>, index: String| map.get(&index).unwrap().clone();
-//     let val = f(&h, 42.to_string());
-//     h.insert(43.to_string(), val);
-// }
 
 #[allow(dead_code)]
 fn pause() {

@@ -53,8 +53,8 @@ pub struct Block {
 
 impl Block {
     fn new(mut statements: Vec<StatementKind>, tail: Option<Box<ExprKind>>) -> Self {
-        // If the final statement can be read as an expr and there is no tail, move it to the tail
-        // TODO: this code is not very good :)
+        // If the final statement can be read as an expr and there is no tail, move it
+        // to the tail. TODO: this code is not very good :)
         let tail = tail.or_else(|| match statements.pop()? {
             StatementKind::ExprStatement(e) if !e.ends_with_semicolon() => Some(e),
             last => {
