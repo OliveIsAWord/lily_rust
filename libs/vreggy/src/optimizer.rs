@@ -3,7 +3,7 @@ use super::lir::{
     visit_branch, visit_branch_immut, visit_branchpoint, visit_branchpoint_immut, visit_op,
     visit_op_immut, Block, BlockId, Branch, BranchPoint, Op, Program, Register, ValueKind,
 };
-use super::{verify, verify_block};
+use super::{verify, verify_block, ModifyHandle, ModifyHandleInner};
 use dbg_pls::{color, DebugPls};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -17,63 +17,66 @@ const PROGRAM_OPTIMIZATIONS: &[fn(&mut Program) -> bool] = &[
     remove_dead_blocks_pass,
     remove_unused_inputs_pass,
 ];
-const BLOCK_OPTIMIZATIONS: &[fn(&mut Block) -> bool] = &[
+const BLOCK_OPTIMIZATIONS_OLD: &[fn(&mut Block) -> bool] = &[
     const_propogation_pass,
     common_node_elimination_pass,
     remove_copy_pass,
     branch_on_not_pass,
     erase_unused_registers_pass,
-    erase_useless_ops_pass,
-    remove_nop_pass,
+    //erase_useless_ops_pass,
+];
+const BLOCK_OPTIMIZATIONS: &[fn(ModifyHandle<Block>)] = &[
+    erase_useless_ops_pass_new,
+    remove_nop_pass_new,
 ];
 
-pub fn optimize_interactive(program: &mut Program) {
-    let input = || {
-        use std::io::{stdin, stdout, Write};
-        let mut stdout = stdout();
-        stdout.write_all(b"> ").unwrap();
-        stdout.flush().unwrap();
-        let mut s = String::new();
-        stdin().read_line(&mut s).unwrap();
-        s
-    };
-    loop {
-        let (porb, i): (bool, usize) = loop {
-            let buffer = input();
-            let s = buffer.trim();
-            let Some(first) = s.chars().next() else {
-                continue;
-            };
-            let porb = match first {
-                'p' => true,
-                'b' => false,
-                'l' => {
-                    println!("{}", &program);
-                    continue;
-                }
-                'e' => return,
-                _ => {
-                    eprintln!("Could not parse command.");
-                    continue;
-                }
-            };
-            let Ok(i) = s[1..].parse() else {
-                eprintln!("Could not parse index `{}`.", &s[1..]);
-                continue;
-            };
-            break (porb, i);
-        };
-        if porb && PROGRAM_OPTIMIZATIONS[i](program) {
-            println!("{}", &program);
-        } else {
-            let o = BLOCK_OPTIMIZATIONS[i];
-            for (id, block) in &mut program.blocks {
-                if o(block) {
-                    println!("{} {}", id, block);
-                }
-            }
-        }
-    }
+pub fn optimize_interactive(_program: &mut Program) {
+    // let input = || {
+    //     use std::io::{stdin, stdout, Write};
+    //     let mut stdout = stdout();
+    //     stdout.write_all(b"> ").unwrap();
+    //     stdout.flush().unwrap();
+    //     let mut s = String::new();
+    //     stdin().read_line(&mut s).unwrap();
+    //     s
+    // };
+    // loop {
+    //     let (porb, i): (bool, usize) = loop {
+    //         let buffer = input();
+    //         let s = buffer.trim();
+    //         let Some(first) = s.chars().next() else {
+    //             continue;
+    //         };
+    //         let porb = match first {
+    //             'p' => true,
+    //             'b' => false,
+    //             'l' => {
+    //                 println!("{}", &program);
+    //                 continue;
+    //             }
+    //             'e' => return,
+    //             _ => {
+    //                 eprintln!("Could not parse command.");
+    //                 continue;
+    //             }
+    //         };
+    //         let Ok(i) = s[1..].parse() else {
+    //             eprintln!("Could not parse index `{}`.", &s[1..]);
+    //             continue;
+    //         };
+    //         break (porb, i);
+    //     };
+    //     if porb && PROGRAM_OPTIMIZATIONS[i](program) {
+    //         println!("{}", &program);
+    //     } else {
+    //         let o = BLOCK_OPTIMIZATIONS_OLD[i];
+    //         for (id, block) in &mut program.blocks {
+    //             if o(block) {
+    //                 println!("{} {}", id, block);
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 pub fn optimize(program: &mut Program) -> bool {
@@ -114,13 +117,19 @@ fn optimize_blocks_pass(program: &mut Program) -> bool {
     let mut did_optimize = false;
     for (_id, block) in &mut program.blocks {
         let mut flag = false;
-        for (_i, o) in BLOCK_OPTIMIZATIONS.iter().enumerate() {
+        for (_i, o) in BLOCK_OPTIMIZATIONS_OLD.iter().enumerate() {
             let x = o(block);
             // if x {
             //     println!("b{i}");
             //     println!("{id} {block}");
             // }
             flag |= x;
+            verify_block(block).unwrap();
+        }
+        for (_i, o) in BLOCK_OPTIMIZATIONS.iter().enumerate() {
+            let mut handle = ModifyHandleInner::new(block);
+            o(handle.as_handle());
+            flag |= handle.was_modified();
             verify_block(block).unwrap();
         }
         did_optimize |= flag;
@@ -276,10 +285,12 @@ fn remove_unused_inputs_pass(program: &mut Program) -> bool {
     true
 }
 
-fn remove_nop_pass(b: &mut Block) -> bool {
-    let old_len = b.ops.len();
-    b.ops.retain(|(_, op)| op != &Op::Nop);
-    b.ops.len() < old_len
+fn remove_nop_pass_new(mut b: ModifyHandle<Block>) {
+    let block = b.request_mut();
+    let old_len = block.ops.len();
+    block.ops.retain(|(_, op)| op != &Op::Nop);
+    let did_optimize = block.ops.len() < old_len;
+    b.set_modified(did_optimize);
 }
 
 fn remove_copy_pass(b: &mut Block) -> bool {
@@ -334,15 +345,13 @@ fn erase_unused_registers_pass(b: &mut Block) -> bool {
     true
 }
 
-fn erase_useless_ops_pass(b: &mut Block) -> bool {
-    let mut did_optimize = false;
-    for (reg, op) in &mut b.ops {
+fn erase_useless_ops_pass_new(mut b: ModifyHandle<Block>) {
+    for i in 0..b.get().ops.len() {
+        let (reg, op) = &b.get().ops[i];
         if reg.is_none() && op.is_pure() && op != &Op::Nop {
-            *op = Op::Nop;
-            did_optimize = true;
+            b.request_mut().ops[i].1 = Op::Nop;
         }
     }
-    did_optimize
 }
 
 fn const_propogation_pass(b: &mut Block) -> bool {

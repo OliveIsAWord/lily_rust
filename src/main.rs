@@ -37,6 +37,13 @@ fn main() {
     if vreggy::optimize(&mut ir) {
         println!("=== Optimized ===");
         println!("{}", ir);
+        let did_regress = include_str!("../did_regress.txt").trim();
+        let meow = format!("{}", ir);
+        let nya = meow.trim();
+        if nya != did_regress {
+            let i = nya.chars().zip(did_regress.chars()).position(|(a, b)| a != b).unwrap();
+            panic!("regression at char {i}!!!");
+        }
     } else {
         println!("Could not optimize further.");
     }

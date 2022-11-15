@@ -1,0 +1,68 @@
+entry = block_42()
+block_42():
+    r1 = 110
+    r2 = 1
+    r4 = alloc r2
+    r5 = 0
+    r4[r5] = r2
+    print_slice(r4, r2)
+    r7 = 2
+    r8 = alloc r7
+    r9 = r4[r5]
+    r15 = r5 + r9
+    branch r15 { jump block_51(r1, r2, r4, r7, r8, r5, r5, r5, r9, r15, r2) } else { jump block_52(r1, r2, r4, r7, r8, r5, r5, r9, r2) }
+block_44(i1, i2, i3):
+    r1 = 1
+    r2 = i2 + r1
+    r3 = alloc r2
+    r4 = 0
+    r5 = r4 - r2
+    branch r5 { jump block_46(i1, i2, i3, r2, r3, r4, r4, r4) } else { jump block_53(i1, i3, r2, r3) }
+block_46(i1, i2, i3, i4, i5, i6, i8, i9):
+    r3 = i6 - i2
+    branch r3 { jump block_47(i1, i2, i3, i4, i5, i6, i8, i9) } else { jump block_48(i1, i2, i3, i4, i5, i6, i8, i9) }
+block_47(i1, i2, i3, i4, i5, i6, i7, i8):
+    r1 = i3[i6]
+    r2 = 4
+    r3 = r2 * i7
+    r4 = 2
+    r5 = r4 * i8
+    r6 = r3 + r5
+    r7 = r6 + r1
+    r8 = 1
+    branch r7 { jump block_51(i1, i2, i3, i4, i5, i6, i7, i8, r1, r7, r8) } else { jump block_52(i1, i2, i3, i4, i5, i6, i8, r1, r8) }
+block_48(i1, i2, i3, i4, i5, i6, i7, i8):
+    r1 = 0
+    r2 = 4
+    r3 = r2 * i7
+    r4 = 2
+    r5 = r4 * i8
+    r6 = r3 + r5
+    r7 = r6 + r1
+    r8 = 1
+    branch r7 { jump block_51(i1, i2, i3, i4, i5, i6, i7, i8, r1, r7, r8) } else { jump block_52(i1, i2, i3, i4, i5, i6, i8, r1, r8) }
+block_51(i1, i2, i3, i4, i5, i6, i7, i8, i9, i10, i11):
+    r1 = 2
+    r2 = i11 * r1
+    r4 = 1
+    r5 = i10 - r4
+    branch r5 { jump block_51(i1, i2, i3, i4, i5, i6, i7, i8, i9, r5, r2) } else { jump block_52(i1, i2, i3, i4, i5, i6, i8, i9, r2) }
+block_52(i1, i2, i3, i4, i5, i6, i8, i9, i11):
+    r2 = i1 / i11
+    r3 = 2
+    r4 = r2 % r3
+    i5[i6] = r4
+    r6 = 1
+    r7 = i6 + r6
+    r8 = r7 - i4
+    branch r8 { jump block_46(i1, i2, i3, i4, i5, r7, i8, i9) } else { jump block_53(i1, i3, i4, i5) }
+block_53(i1, i3, i4, i5):
+    dealloc i3
+    print_slice(i5, i4)
+    r2 = 15
+    r3 = i4 - r2
+    branch r3 { jump block_44(i1, i4, i5) } else { jump block_54(i5) }
+block_54(i3):
+    dealloc i3
+    r3 = 69
+    return r3

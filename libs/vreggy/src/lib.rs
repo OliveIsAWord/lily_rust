@@ -4,7 +4,7 @@ mod modify_handle;
 mod optimizer;
 mod verifier;
 
-pub use modify_handle::ModifyHandle;
+pub use modify_handle::{ModifyHandle, ModifyHandleInner};
 pub use optimizer::{optimize, optimize_interactive};
 pub use verifier::{verify, verify_block};
 
