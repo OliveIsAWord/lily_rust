@@ -191,9 +191,9 @@ pub fn visit_branchpoint_immut(bp: &BranchPoint, mut f: impl FnMut(Register)) {
 pub type BlockId = u32;
 #[derive(Clone, Debug, DebugPls)]
 pub struct Block {
-    pub(super) inputs: Vec<R>,
-    pub(super) ops: Vec<(Option<R>, Op)>,
-    pub(super) exit: Branch,
+    pub inputs: Vec<R>,
+    pub ops: Vec<(Option<R>, Op)>,
+    pub exit: Branch,
 }
 
 impl Block {

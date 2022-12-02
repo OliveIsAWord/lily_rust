@@ -9,7 +9,7 @@ pub use optimizer::{optimize, optimize_interactive};
 pub use verifier::{verify, verify_block};
 
 use dbg_pls::{color, pretty, DebugPls};
-use lir::{
+pub use lir::{
     Block, BlockId, Branch, BranchPoint, Op, Program, Provenance, RegId, Register, ValueKind,
 };
 use parser::{Block as ParserBlock, ExprKind, Literal, Mutability, StatementKind};

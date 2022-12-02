@@ -4,11 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = [
-    "libs/lexer",
-    "libs/parser",
-    "libs/vreggy",
-]
+members = ["libs/*"]
 
 [dependencies]
 dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty"]}
@@ -16,3 +12,4 @@ dbg-pls = {version = "0.3.4", features = ["colors", "derive", "pretty"]}
 lexer = {path = "libs/lexer"}
 parser = {path = "libs/parser"}
 vreggy = {path = "libs/vreggy"}
+codegen_rs = {path = "libs/codegen_rs"}

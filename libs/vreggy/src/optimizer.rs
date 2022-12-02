@@ -25,10 +25,8 @@ const BLOCK_OPTIMIZATIONS_OLD: &[fn(&mut Block) -> bool] = &[
     erase_unused_registers_pass,
     //erase_useless_ops_pass,
 ];
-const BLOCK_OPTIMIZATIONS: &[fn(ModifyHandle<Block>)] = &[
-    erase_useless_ops_pass_new,
-    remove_nop_pass_new,
-];
+const BLOCK_OPTIMIZATIONS: &[fn(ModifyHandle<Block>)] =
+    &[erase_useless_ops_pass_new, remove_nop_pass_new];
 
 pub fn optimize_interactive(_program: &mut Program) {
     // let input = || {

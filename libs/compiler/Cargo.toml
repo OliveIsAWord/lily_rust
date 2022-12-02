@@ -1,8 +1,0 @@
-[package]
-name = "compiler"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-cranelift = "0.88.1"
-parser = {path = "../parser"}

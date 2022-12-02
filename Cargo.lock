@@ -86,6 +86,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codegen_rs"
+version = "0.1.0"
+dependencies = [
+ "vreggy",
+]
+
+[[package]]
 name = "const-random"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -233,6 +240,7 @@ checksum = "68783febc7782c6c5cb401fbda4de5a9898be1762314da0bb2c10ced61f18b0c"
 name = "lily_rust"
 version = "0.1.0"
 dependencies = [
+ "codegen_rs",
  "dbg-pls",
  "lexer",
  "parser",
