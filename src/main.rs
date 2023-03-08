@@ -50,6 +50,6 @@ fn main() {
 
     let mut rs_source = String::new();
     codegen_rs::gen_code(&ir, &mut rs_source).unwrap();
-    println!("\n{rs_source}");
+    //println!("\n{rs_source}");
     //vreggy::execute(&ir);
 }
